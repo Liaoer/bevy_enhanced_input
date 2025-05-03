@@ -5,11 +5,11 @@ use bevy_enhanced_input::prelude::*;
 fn keys() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Dummy>()
+        .add_input_context::<Test>()
         .add_observer(binding)
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Dummy>::default()).id();
+    let entity = app.world_mut().spawn(Actions::<Test>::default()).id();
 
     app.update();
 
@@ -24,6 +24,12 @@ fn keys() {
         (KeyCode::ArrowRight, RIGHT),
         (KeyCode::NumpadSubtract, LEFT),
         (KeyCode::NumpadAdd, RIGHT),
+        (KeyCode::Digit0, FORWARD),
+        (KeyCode::Digit1, BACKWARD),
+        (KeyCode::Digit2, LEFT),
+        (KeyCode::Digit3, RIGHT),
+        (KeyCode::Digit4, UP),
+        (KeyCode::Digit5, DOWN),
     ] {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -31,9 +37,9 @@ fn keys() {
 
         app.update();
 
-        let actions = app.world().get::<Actions<Dummy>>(entity).unwrap();
+        let actions = app.world().get::<Actions<Test>>(entity).unwrap();
         assert_eq!(
-            actions.action::<DummyAction>().value(),
+            actions.action::<TestAction>().value(),
             dir.into(),
             "`{key:?}` should result in `{dir}`"
         );
@@ -50,12 +56,12 @@ fn keys() {
 fn dpad() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Dummy>()
+        .add_input_context::<Test>()
         .add_observer(binding)
         .finish();
 
     let gamepad_entity = app.world_mut().spawn(Gamepad::default()).id();
-    let ctx_entity = app.world_mut().spawn(Actions::<Dummy>::default()).id();
+    let ctx_entity = app.world_mut().spawn(Actions::<Test>::default()).id();
 
     app.update();
 
@@ -70,9 +76,9 @@ fn dpad() {
 
         app.update();
 
-        let actions = app.world().get::<Actions<Dummy>>(ctx_entity).unwrap();
+        let actions = app.world().get::<Actions<Test>>(ctx_entity).unwrap();
         assert_eq!(
-            actions.action::<DummyAction>().value(),
+            actions.action::<TestAction>().value(),
             dir.into(),
             "`{button:?}` should result in `{dir}`"
         );
@@ -88,12 +94,12 @@ fn dpad() {
 fn sticks() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Dummy>()
+        .add_input_context::<Test>()
         .add_observer(binding)
         .finish();
 
     let gamepad_entity = app.world_mut().spawn(Gamepad::default()).id();
-    let ctx_entity = app.world_mut().spawn(Actions::<Dummy>::default()).id();
+    let ctx_entity = app.world_mut().spawn(Actions::<Test>::default()).id();
 
     app.update();
 
@@ -109,9 +115,9 @@ fn sticks() {
 
             app.update();
 
-            let actions = app.world().get::<Actions<Dummy>>(ctx_entity).unwrap();
+            let actions = app.world().get::<Actions<Test>>(ctx_entity).unwrap();
             assert_eq!(
-                actions.action::<DummyAction>().value(),
+                actions.action::<TestAction>().value(),
                 dir.into(),
                 "`{axis:?}` should result in `{dir}`"
             );
@@ -124,14 +130,16 @@ fn sticks() {
     }
 }
 
-const UP: Vec2 = Vec2::new(0.0, 1.0);
-const LEFT: Vec2 = Vec2::new(-1.0, 0.0);
-const DOWN: Vec2 = Vec2::new(0.0, -1.0);
-const RIGHT: Vec2 = Vec2::new(1.0, 0.0);
+const RIGHT: Vec3 = Vec3::X;
+const LEFT: Vec3 = Vec3::NEG_X;
+const BACKWARD: Vec3 = Vec3::Z;
+const FORWARD: Vec3 = Vec3::NEG_Z;
+const UP: Vec3 = Vec3::Y;
+const DOWN: Vec3 = Vec3::NEG_Y;
 
-fn binding(trigger: Trigger<Binding<Dummy>>, mut actions: Query<&mut Actions<Dummy>>) {
+fn binding(trigger: Trigger<Binding<Test>>, mut actions: Query<&mut Actions<Test>>) {
     let mut actions = actions.get_mut(trigger.target()).unwrap();
-    actions.bind::<DummyAction>().to((
+    actions.bind::<TestAction>().to((
         Cardinal::wasd_keys(),
         Cardinal::arrow_keys(),
         Cardinal::dpad_buttons(),
@@ -141,12 +149,20 @@ fn binding(trigger: Trigger<Binding<Dummy>>, mut actions: Query<&mut Actions<Dum
         },
         Axial::left_stick(),
         Axial::right_stick(),
+        Spatial {
+            forward: KeyCode::Digit0,
+            backward: KeyCode::Digit1,
+            left: KeyCode::Digit2,
+            right: KeyCode::Digit3,
+            up: KeyCode::Digit4,
+            down: KeyCode::Digit5,
+        },
     ));
 }
 
 #[derive(InputContext)]
-struct Dummy;
+struct Test;
 
 #[derive(Debug, InputAction)]
-#[input_action(output = Vec2, consume_input = true)]
-struct DummyAction;
+#[input_action(output = Vec3, consume_input = true)]
+struct TestAction;
