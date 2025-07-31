@@ -1,5 +1,6 @@
 use bevy::{input::InputPlugin, prelude::*};
 use bevy_enhanced_input::prelude::*;
+use test_log::test;
 
 #[test]
 fn layering() {
@@ -7,56 +8,83 @@ fn layering() {
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
         .add_input_context::<First>()
         .add_input_context::<Second>()
-        .add_observer(first_binding)
-        .add_observer(second_binding)
         .finish();
 
-    let entity = app
+    let context = app
         .world_mut()
-        .spawn((Actions::<First>::default(), Actions::<Second>::default()))
+        .spawn((
+            Second,
+            actions!(Second[(Action::<OnSecond>::new(), bindings![KEY])]),
+        ))
         .id();
 
     app.update();
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(KEY);
 
     app.update();
 
-    let first = app.world().get::<Actions<First>>(entity).unwrap();
-    assert_eq!(first.action::<TestAction>().state(), ActionState::Fired);
+    let mut second_actions = app
+        .world_mut()
+        .query_filtered::<&ActionState, With<Action<OnSecond>>>();
 
-    let second = app.world().get::<Actions<Second>>(entity).unwrap();
-    assert_eq!(second.action::<TestAction>().state(), ActionState::None);
+    let second_state = *second_actions.single(app.world()).unwrap();
+    assert_eq!(second_state, ActionState::Fired);
 
-    app.world_mut()
-        .entity_mut(entity)
-        .remove::<Actions<First>>();
+    app.world_mut().entity_mut(context).insert((
+        First,
+        ContextPriority::<First>::new(1),
+        actions!(
+            First[(
+                Action::<OnFirst>::new(),
+                ActionSettings {
+                    require_reset: true,
+                    ..Default::default()
+                },
+                bindings![KEY]
+            )]
+        ),
+    ));
 
     app.update();
 
-    let second = app.world().get::<Actions<Second>>(entity).unwrap();
+    let mut first_actions = app
+        .world_mut()
+        .query_filtered::<&ActionState, With<Action<OnFirst>>>();
+
+    let first_state = *first_actions.single(app.world()).unwrap();
     assert_eq!(
-        second.action::<TestAction>().state(),
+        first_state,
         ActionState::None,
-        "action should still be consumed even after removal"
+        "shouldn't fire because the input should stop actuating first"
+    );
+
+    let second_state = *second_actions.single(app.world()).unwrap();
+    assert_eq!(
+        second_state,
+        ActionState::None,
+        "shouldn't fire because consumed by the first action"
     );
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(TestAction::KEY);
+        .release(KEY);
 
     app.update();
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(KEY);
 
     app.update();
 
-    let second = app.world().get::<Actions<Second>>(entity).unwrap();
-    assert_eq!(second.action::<TestAction>().state(), ActionState::Fired);
+    let first_state = *first_actions.single(app.world()).unwrap();
+    assert_eq!(first_state, ActionState::Fired);
+
+    let second_state = *second_actions.single(app.world()).unwrap();
+    assert_eq!(second_state, ActionState::None);
 }
 
 #[test]
@@ -65,74 +93,86 @@ fn switching() {
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
         .add_input_context::<First>()
         .add_input_context::<Second>()
-        .add_observer(first_binding)
-        .add_observer(second_binding)
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<First>::default()).id();
+    let context = app
+        .world_mut()
+        .spawn((
+            First,
+            ContextPriority::<First>::new(1),
+            actions!(
+                First[(
+                    Action::<OnFirst>::new(),
+                    ActionSettings {
+                        require_reset: true,
+                        ..Default::default()
+                    },
+                    bindings![KEY]
+                )]
+            ),
+        ))
+        .id();
 
     app.update();
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<First>>(entity).unwrap();
-    assert_eq!(actions.action::<TestAction>().state(), ActionState::Fired);
+    let mut actions = app.world_mut().query::<&ActionState>();
+
+    let first_state = *actions.single(app.world()).unwrap();
+    assert_eq!(first_state, ActionState::Fired);
 
     app.world_mut()
-        .entity_mut(entity)
-        .remove::<Actions<First>>()
-        .insert(Actions::<Second>::default());
+        .entity_mut(context)
+        .remove_with_requires::<First>()
+        .despawn_related::<Actions<First>>()
+        .insert((
+            Second,
+            actions!(Second[(Action::<OnSecond>::new(), bindings![KEY])]),
+        ));
 
     app.update();
 
-    let second = app.world().get::<Actions<Second>>(entity).unwrap();
+    let second_state = *actions.single(app.world()).unwrap();
     assert_eq!(
-        second.action::<TestAction>().state(),
+        second_state,
         ActionState::None,
         "action should still be consumed even after removal"
     );
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(TestAction::KEY);
+        .release(KEY);
 
     app.update();
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(KEY);
 
     app.update();
 
-    let second = app.world().get::<Actions<Second>>(entity).unwrap();
-    assert_eq!(second.action::<TestAction>().state(), ActionState::Fired);
+    let second_state = *actions.single(app.world()).unwrap();
+    assert_eq!(second_state, ActionState::Fired);
 }
 
-fn first_binding(trigger: Trigger<Binding<First>>, mut actions: Query<&mut Actions<First>>) {
-    let mut actions = actions.get_mut(trigger.target()).unwrap();
-    actions.bind::<TestAction>().to(TestAction::KEY);
-}
-
-fn second_binding(trigger: Trigger<Binding<Second>>, mut actions: Query<&mut Actions<Second>>) {
-    let mut actions = actions.get_mut(trigger.target()).unwrap();
-    actions.bind::<TestAction>().to(TestAction::KEY);
-}
-
-#[derive(InputContext)]
-#[input_context(priority = 1)]
+#[derive(Component)]
 struct First;
 
-#[derive(InputContext)]
+#[derive(Component)]
 struct Second;
 
-#[derive(Debug, InputAction)]
-#[input_action(output = bool, require_reset = true)]
-struct TestAction;
+/// A key used by all actions.
+const KEY: KeyCode = KeyCode::KeyA;
 
-impl TestAction {
-    const KEY: KeyCode = KeyCode::KeyA;
-}
+#[derive(InputAction)]
+#[action_output(bool)]
+struct OnFirst;
+
+#[derive(InputAction)]
+#[action_output(bool)]
+struct OnSecond;

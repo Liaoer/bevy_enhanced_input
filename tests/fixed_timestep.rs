@@ -1,5 +1,6 @@
 use bevy::{input::InputPlugin, prelude::*, time::TimeUpdateStrategy};
 use bevy_enhanced_input::prelude::*;
+use test_log::test;
 
 #[test]
 fn once_in_two_frames() {
@@ -8,33 +9,33 @@ fn once_in_two_frames() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(time_step))
-        .add_input_context::<Test>()
-        .add_observer(binding)
+        .add_input_context_to::<FixedPreUpdate, TestContext>()
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Test>::default()).id();
+    app.world_mut().spawn((
+        TestContext,
+        actions!(TestContext[(Action::<Test>::new(), bindings![Test::KEY])]),
+    ));
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(Test::KEY);
+
+    let mut actions = app.world_mut().query::<&ActionEvents>();
 
     for frame in 0..2 {
         app.update();
 
-        let actions = app.world().get::<Actions<Test>>(entity).unwrap();
-        assert!(
-            actions.action::<TestAction>().events().is_empty(),
-            "shouldn't fire on frame {frame}"
-        );
+        let events = *actions.single(app.world()).unwrap();
+        assert!(events.is_empty(), "shouldn't fire on frame {frame}");
     }
 
     for frame in 2..4 {
         app.update();
 
-        let actions = app.world().get::<Actions<Test>>(entity).unwrap();
-        let action = actions.action::<TestAction>();
+        let events = *actions.single(app.world()).unwrap();
         assert_eq!(
-            action.events(),
+            events,
             ActionEvents::STARTED | ActionEvents::FIRED,
             "should maintain start-firing on frame {frame}"
         );
@@ -48,48 +49,44 @@ fn twice_in_one_frame() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(time_step))
-        .add_input_context::<Test>()
-        .add_observer(binding)
+        .add_input_context_to::<FixedPreUpdate, TestContext>()
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Test>::default()).id();
+    app.world_mut().spawn((
+        TestContext,
+        actions!(TestContext[(Action::<Test>::new(), bindings![Test::KEY])]),
+    ));
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(TestAction::KEY);
+        .press(Test::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Test>>(entity).unwrap();
+    let mut actions = app.world_mut().query::<&ActionEvents>();
+    let events = *actions.single(app.world()).unwrap();
     assert!(
-        actions.action::<TestAction>().events().is_empty(),
+        events.is_empty(),
         "`FixedMain` should never run on the first frame"
     );
 
     app.update();
 
-    let actions = app.world().get::<Actions<Test>>(entity).unwrap();
-    let action = actions.action::<TestAction>();
+    let events = *actions.single(app.world()).unwrap();
     assert_eq!(
-        action.events(),
+        events,
         ActionEvents::FIRED,
         "should run twice, so it shouldn't be started on the second run"
     );
 }
 
-fn binding(trigger: Trigger<Binding<Test>>, mut actions: Query<&mut Actions<Test>>) {
-    let mut actions = actions.get_mut(trigger.target()).unwrap();
-    actions.bind::<TestAction>().to(TestAction::KEY);
-}
+#[derive(Component)]
+struct TestContext;
 
-#[derive(InputContext)]
-#[input_context(schedule = FixedPreUpdate)]
+#[derive(InputAction)]
+#[action_output(bool)]
 struct Test;
 
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct TestAction;
-
-impl TestAction {
+impl Test {
     const KEY: KeyCode = KeyCode::KeyA;
 }

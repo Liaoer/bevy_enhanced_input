@@ -1,329 +1,219 @@
-use core::any;
-
-use bevy::{input::InputPlugin, prelude::*};
+use bevy::{ecs::spawn::SpawnWith, input::InputPlugin, prelude::*};
 use bevy_enhanced_input::prelude::*;
+use test_log::test;
 
 #[test]
 fn explicit() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Player>()
-        .add_observer(binding)
+        .add_input_context::<TestContext>()
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Player>::default()).id();
+    app.world_mut().spawn((
+        TestContext,
+        actions!(TestContext[(Action::<Test>::new(), Down::default(), bindings![Test::KEY])]),
+    ));
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Explicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let mut actions = app.world_mut().query::<(&Action<Test>, &ActionState)>();
+
+    let (&action, &state) = actions.single(app.world()).unwrap();
+    assert!(!*action);
+    assert_eq!(state, ActionState::None);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(Explicit::KEY);
+        .press(Test::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Explicit>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&action, &state) = actions.single(app.world()).unwrap();
+    assert!(*action);
+    assert_eq!(state, ActionState::Fired);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(Explicit::KEY);
+        .release(Test::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Explicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&action, &state) = actions.single(app.world()).unwrap();
+    assert!(!*action);
+    assert_eq!(state, ActionState::None);
 }
 
 #[test]
 fn implicit() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Player>()
-        .add_observer(binding)
+        .add_input_context::<TestContext>()
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Player>::default()).id();
+    app.world_mut().spawn((
+        TestContext,
+        Actions::<TestContext>::spawn(SpawnWith(|context: &mut ActionSpawner<_>| {
+            let release = context
+                .spawn((
+                    Action::<OnRelease>::new(),
+                    Release::default(),
+                    bindings![OnRelease::KEY],
+                ))
+                .id();
+            context.spawn((Action::<Test>::new(), Chord::single(release)));
+        })),
+    ));
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let mut release_actions = app
+        .world_mut()
+        .query::<(&Action<OnRelease>, &ActionState)>();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Implicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::None);
+
+    let mut test_actions = app.world_mut().query::<(&Action<Test>, &ActionState)>();
+
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(!*test_action);
+    assert_eq!(test_state, ActionState::None);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .press(ReleaseAction::KEY);
+        .press(OnRelease::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Ongoing);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(*release_action);
+    assert_eq!(release_state, ActionState::Ongoing);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Implicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::Ongoing);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(!*test_action);
+    assert_eq!(test_state, ActionState::Ongoing);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(ReleaseAction::KEY);
+        .release(OnRelease::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::Fired);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Implicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(!*test_action);
+    assert_eq!(test_state, ActionState::Fired);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::None);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Implicit>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(!*test_action);
+    assert_eq!(test_state, ActionState::None);
 }
 
 #[test]
 fn blocker() {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Player>()
-        .add_observer(binding)
+        .add_input_context::<TestContext>()
         .finish();
 
-    let entity = app.world_mut().spawn(Actions::<Player>::default()).id();
+    app.world_mut().spawn((
+        TestContext,
+        Actions::<TestContext>::spawn(SpawnWith(|context: &mut ActionSpawner<_>| {
+            let release = context
+                .spawn((
+                    Action::<OnRelease>::new(),
+                    Release::default(),
+                    bindings![OnRelease::KEY],
+                ))
+                .id();
+            context.spawn((
+                Action::<Test>::new(),
+                BlockBy::single(release),
+                bindings![Test::KEY],
+            ));
+        })),
+    ));
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let mut release_actions = app
+        .world_mut()
+        .query::<(&Action<OnRelease>, &ActionState)>();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Blocker>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::None);
+
+    let mut test_actions = app.world_mut().query::<(&Action<Test>, &ActionState)>();
+
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(!*test_action);
+    assert_eq!(test_state, ActionState::None);
 
     let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-    keys.press(ReleaseAction::KEY);
-    keys.press(Blocker::KEY);
+    keys.press(OnRelease::KEY);
+    keys.press(Test::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Ongoing);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(*release_action);
+    assert_eq!(release_state, ActionState::Ongoing);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Blocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(*test_action);
+    assert_eq!(test_state, ActionState::Fired);
 
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
-        .release(ReleaseAction::KEY);
+        .release(OnRelease::KEY);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::Fired);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Blocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(*test_action);
+    assert_eq!(test_state, ActionState::None);
 
     app.update();
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
+    let (&release_action, &release_state) = release_actions.single(app.world()).unwrap();
+    assert!(!*release_action);
+    assert_eq!(release_state, ActionState::None);
 
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<Blocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
+    let (&test_action, &test_state) = test_actions.single(app.world()).unwrap();
+    assert!(*test_action);
+    assert_eq!(test_state, ActionState::Fired);
 }
 
-#[test]
-fn events_blocker() {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, InputPlugin, EnhancedInputPlugin))
-        .add_input_context::<Player>()
-        .add_observer(binding)
-        .finish();
+#[derive(Component)]
+struct TestContext;
 
-    let entity = app.world_mut().spawn(Actions::<Player>::default()).id();
+#[derive(InputAction)]
+#[action_output(bool)]
+struct Test;
 
-    app.update();
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<EventsBlocker>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
-
-    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-    keys.press(ReleaseAction::KEY);
-    keys.press(EventsBlocker::KEY);
-
-    app.update();
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Ongoing);
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<EventsBlocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(ReleaseAction::KEY);
-    let observers = panic_on_action_events::<EventsBlocker>(app.world_mut());
-
-    app.update();
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::Fired);
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<EventsBlocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
-
-    for entity in observers {
-        app.world_mut().despawn(entity);
-    }
-
-    app.update();
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<ReleaseAction>();
-    assert_eq!(action.value(), false.into());
-    assert_eq!(action.state(), ActionState::None);
-
-    let actions = app.world().get::<Actions<Player>>(entity).unwrap();
-    let action = actions.action::<EventsBlocker>();
-    assert_eq!(action.value(), true.into());
-    assert_eq!(action.state(), ActionState::Fired);
-}
-
-fn binding(trigger: Trigger<Binding<Player>>, mut actions: Query<&mut Actions<Player>>) {
-    let mut actions = actions.get_mut(trigger.target()).unwrap();
-    actions
-        .bind::<ReleaseAction>()
-        .to(ReleaseAction::KEY)
-        .with_conditions(Release::default());
-    actions
-        .bind::<Explicit>()
-        .with_conditions(Down::default())
-        .to(Explicit::KEY);
-    actions
-        .bind::<Implicit>()
-        .with_conditions(Chord::<ReleaseAction>::default());
-    actions
-        .bind::<Blocker>()
-        .to(Blocker::KEY)
-        .with_conditions(BlockBy::<ReleaseAction>::default());
-    actions
-        .bind::<EventsBlocker>()
-        .to(EventsBlocker::KEY)
-        .with_conditions(BlockBy::<ReleaseAction>::events_only());
-}
-
-#[derive(InputContext)]
-struct Player;
-
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct ReleaseAction;
-
-impl ReleaseAction {
+impl Test {
     const KEY: KeyCode = KeyCode::KeyA;
 }
 
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct Explicit;
+#[derive(InputAction)]
+#[action_output(bool)]
+struct OnRelease;
 
-impl Explicit {
+impl OnRelease {
     const KEY: KeyCode = KeyCode::KeyB;
-}
-
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct Implicit;
-
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct Blocker;
-
-impl Blocker {
-    const KEY: KeyCode = KeyCode::KeyD;
-}
-
-#[derive(Debug, InputAction)]
-#[input_action(output = bool)]
-struct EventsBlocker;
-
-impl EventsBlocker {
-    const KEY: KeyCode = KeyCode::KeyE;
-}
-
-fn panic_on_action_events<A: InputAction>(world: &mut World) -> [Entity; 5] {
-    [
-        world.add_observer(panic_on_event::<Started<A>>).id(),
-        world.add_observer(panic_on_event::<Ongoing<A>>).id(),
-        world.add_observer(panic_on_event::<Fired<A>>).id(),
-        world.add_observer(panic_on_event::<Completed<A>>).id(),
-        world.add_observer(panic_on_event::<Canceled<A>>).id(),
-    ]
-}
-
-fn panic_on_event<E: Event>(_trigger: Trigger<E>) {
-    panic!(
-        "event for action `{}` shouldn't trigger",
-        any::type_name::<E>()
-    );
 }

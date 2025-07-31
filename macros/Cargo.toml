@@ -1,11 +1,11 @@
 [package]
 name = "bevy_enhanced_input_macros"
-version = "0.11.0"
+version = "0.15.0"
 authors = [
   "Hennadii Chernyshchyk <genaloner@gmail.com>",
   "Alice Cecile <alice.i.cecile@gmail.com>",
 ]
-edition = "2021"
+edition = "2024"
 description = "Bevy Enhanced Input Macros"
 readme = "../README.md"
 repository = "https://github.com/projectharmonia/bevy_enhanced_input"
@@ -18,7 +18,6 @@ include = ["/src", "../LICENSE*"]
 proc-macro = true
 
 [dependencies]
-darling = "0.20"
 syn = { version = "2.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"

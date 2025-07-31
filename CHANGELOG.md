@@ -7,10 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2025-07-28
+
+### Added
+
+- More derives to `ActionTime`.
+
+### Fixed
+
+- `Chord` now caps at `ActionState::Ongoing` if any of the actions aren't `ActionState::Fired`.
+
+## [0.15.1] - 2025-07-23
+
+### Added
+
+- `LinearStep` modifier.
+
+## [0.15.0] - 2025-07-23
+
+This update features a big rewrite into a component-based API. The core concepts remain the same, but are now expressed through ECS. It's recommended to revisit the quick start guide.
+
+### Changed
+
+- Input contexts are now regular components. Instead of inserting `Actions<C>`, you insert the `C` component directly.
+- Actions for contexts are now represented by entities with an `ActionOf<C>` relation, where `Actions<C>` is the target located on the context entity (which now only stores entities).
+- `Action` now holds only the action value and its fields, with `ActionState`, `ActionValue`, and `ActionEvents` now being components. Timing is now stored in a new `ActionTime` component.
+- `InputAction` now only contains the associated `Output` type. All action settings are now expressed by the `ActionSettings` component, which can be modified at runtime.
+- Derive macro for `InputAction` now uses `action_output` attribute that accepts only the type.
+- Bindings for actions now represented by entities with `BindingOf<A>` relations, where `Bindings<C>` is the target located on an action entity.
+- Rename `Input` into `Binding` which now a component that represents the assigned binding.
+- Modifiers and conditions now regular components on action and binding entities. Custom modifiers and conditions now needs to be registered using `InputModifierAppExt::add_input_modifier` and `InputConditionAppExt::add_input_condition` respectively. To access other actions, these traits now accept a query instead of `TypeIdMap<UntypedAction>`.
+- Mocking now represented by `ActionMock` component that can be added to action entities.
+- Presets now represented by `SpawnableList`s and store bundles. To assign multiple items as before, just spawn multiple presets. For empty bindings inside presets we now provide convenient `Binding::None`.
+- `GamepadDevice` is now a component on entities with input contexts. It now includes `GamepadDevice::None` variant to conveniently disable input from any gamepad.
+- Rename `InputTime` to `ContextTime`.
+- Rename `EnhancedInputSet::Trigger` to `EnhancedInputSet::Apply` since we now also update `Action<C>` from `ActionValue` here.
+- Rename `InputModifier::apply` to `InputModifier::transform` to avoid name collision with `Reflect::apply`.
+- Mark the input as consumed on first actuation regardless of the end action state. This produces a more expected behavior.
+
+### Removed
+
+- `InputContext`. The schedule now can be set during registration via `InputContextAppExt::add_input_context_to`. Priority can be dynamically controlled by `ContextPriority` component, which you can set as a required component with specific value.
+- `RebindAll` and `Bind`. If you already have settings and want to reload them, you probably have an event for that anyway, since you'll likely need to change multiple things - not just bindings.
+
+## [0.14.1] - 2025-06-26
+
+### Fixed
+
+- Input consumption now works properly for contexts with different schedules.
+- `Pulse` condition triggered `Fired` only on the first actuation.
+- `HoldAndRelease` condition fired only on exact duration match.
+
+## [0.14.0] - 2025-06-25
+
+### Changed
+
+- `Action<A>` now implements `Clone` and `Copy` for any `A`.
+- `ActionEvents` now implements `Serialize` and `Deserialize`.
+- Split `EnhancedInputSystem` into `EnhancedInputSet::Update` (reads new inputs from the `InputReader` and updates the `Actions` components) and `EnhancedInputSet::Trigger` (triggers the events corresponding to how the `Actions` components changed).
+- Move most of the `Actions<C>` functionality to an untyped struct `UntypedActions`. `Actions<C>` derefs to `UntypedActions`, so you don't have to change any call sites.
+
+## [0.13.0] - 2025-06-19
+
+### Added
+
+- `Actions::mock` and related methods to mock actions.
+- Add duplicative swizzles to `SwizzleAxis.`
+- `Actions::bindings` to get bindings access.
+- `Actions::iter` and `Actions::iter_mut` to read and write actions data.
+
+### Changed
+
+- Rename `Binding` event into `Bind`.
+- Rename `RebuildBindings` event into `RebindAll`.
+- Rename `action_instance` module into `input_context` and move `InputContext` to it.
+- Conditions and modifiers now accept the newly added `InputTime` system parameter, which dereferences to `Time`. From it, you can also access `Time<Real>` if you need time that is not affected by time dilation.
+- Rename `relative_speed` into `with_time_kind` and accept the newly added `TimeKind` enum instead of boolean.
+- All conditions with timer no longer implement `Copy`.
+- Rename `input_condition::press` into `input_condition::down` and `input_condition::just_press` into `input_condition::press`. Their structs were renamed in the previous release, but the modules weren't.
+- Merge `acton_map` module into `input_action`.
+- Move `action_binding`, `actions`, `events`, `input_action`, `input_binding`, `input_condition`, `input_modifier` and `preset` modules under `input_context` module.
+- Make all data fields of `Action` public.
+- Return the strongly typed output of an action from `Actions::value`, similar to triggers.
+- Rename `ActionOutput::as_output` into `ActionOutput::unwrap_value`.
+- Rename `Action` into `UntypedAction`.
+- `Actions::get` now returns a typed `Action<A>`.
+
+### Removed
+
+- `BlockBy::events_only` and `ConditionKind::Blocker::events_only`. This functionality was added before the introduction of the pull-based API and caused inconsistencies in returned values. It was intended to be used with `Chord`. If you need an action to be part of a chord but only want to react to it when the chord is not active, just check its state in the observer.
+- `ActionMap::insert`. Use the new action mocking API.
+- `Action::new`, `Action::trigger_events` and `Action::update` from the public API. Use the new action mocking API.
+- `ConditionTimer`. Use Bevy's `Timer`. Use `InputTime::delta_kind` if you need a configurable time dilation.
+- `ActionMap`. Use Bevy's `TypeIdMap` instead.
+- Getters for `Action`. Use the fields, which are now public.
+
+## [0.12.0] - 2025-05-25
+
+### Added
+
+- `Actions::state`, `Actions::value` and `Actions::events` helpers to obtain specific information for an action directly.
+- `ConditionTimer::with_duration`.
+
 ### Changed
 
 - Rename `Press` into `Down`.
 - Rename `JustPress` into `Press`.
+- Return `Result` from `Actions::bindings` to integrate with Bevy's unified error handling system.
+- Rename `Actions::action` into `Actions::get` and return `Result`.
+
+### Fixed
+
+- Dimension cutoff when using `SwizzleAxis` with `Axis2D`.
+
+### Removed
+
+- `Actions::get_action`. Use `Actions::get`.
+- `Actions::get_binding`. Use `Actions::binding`.
 
 ## [0.11.0] - 2025-04-24
 
@@ -78,8 +191,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Rename `ContextInstance` into `InputContext`. `InputContext` is no longer a trait. Bindings now configured via observer on `Bindings<C>` (see docs on `InputContextAppExt::add_input_context` for details). Priority now set at runtime via `InputContext::set_priority`. 
-- Move all child modules from `input_context` under crate root (one level upper). 
+- Rename `ContextInstance` into `InputContext`. `InputContext` is no longer a trait. Bindings now configured via observer on `Bindings<C>` (see docs on `InputContextAppExt::add_input_context` for details). Priority now set at runtime via `InputContext::set_priority`.
+- Move all child modules from `input_context` under crate root (one level upper).
 - Capture gamepad buttons as `Axis1D` because triggers are also buttons and sometimes have analog value.
 - Rename `input_context` module into `registry` and `context_instance` into `input_context`.
 - Rename `ContextAppExt` into `InputContextAppExt`.
@@ -241,7 +354,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
-[unreleased]: https://github.com/projectharmonia/bevy_replicon/compare/v0.11.0...HEAD
+[unreleased]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.1...v0.15.2
+[0.15.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.14.1...v0.15.0
+[0.14.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.8.0...v0.9.0

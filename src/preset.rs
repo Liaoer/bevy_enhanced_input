@@ -1,370 +1,99 @@
-use bevy::prelude::*;
+/*!
+[`SpawnableList`](bevy::ecs::spawn::SpawnableList)s with common modifiers.
 
-use crate::{
-    input_binding::{BindingBuilder, InputBinding, IntoBindings},
-    input_modifier::{negate::Negate, swizzle_axis::SwizzleAxis},
+Similar to other [`SpawnableList`](bevy::ecs::spawn::SpawnableList)s in Bevy, like [`SpawnWith`](bevy::ecs::spawn::SpawnWith)
+or [`SpawnIter`](bevy::ecs::spawn::SpawnIter), you need to call [`SpawnRelated::spawn`](bevy::prelude::SpawnRelated)
+implemented for [`Bindings`](crate::prelude::Bindings) directly instead of using the [`bindings!`](crate::prelude::bindings) macro.
+
+# Examples
+
+With additional bindings.
+
+```
+# use bevy::prelude::*;
+# use bevy_enhanced_input::prelude::*;
+Bindings::spawn((
+    Cardinal::wasd_keys(),
+    Axial::left_stick(),
+    // Additional bindings needs to use `Binding::from` wrapped
+    // into `Spawn`, which is what `bindings!` macro does.
+    Spawn((Binding::from(KeyCode::ArrowUp), SwizzleAxis::YXZ))
+));
+```
+
+Initializing fields.
+
+```
+# use bevy::prelude::*;
+# use bevy_enhanced_input::prelude::*;
+Bindings::spawn((
+    Bidirectional {
+        // Struct fields are bundles, so you can also attach modifiers to individual fields.
+        positive: (Binding::from(KeyCode::NumpadAdd), Scale::splat(2.0)),
+        negative: Binding::from(KeyCode::NumpadSubtract),
+    },
+    Axial::left_stick().with((Scale::splat(1.0), SmoothNudge::default())), // Attach components to each field.
+));
+```
+
+Loading from settings.
+
+```
+# use bevy::prelude::*;
+# use bevy_enhanced_input::prelude::*;
+# use serde::{Serialize, Deserialize};
+// Could be loaded from a file.
+// `Binding::None` represents unbound inputs.
+let settings = InputSettings {
+    forward: [Binding::from(KeyCode::KeyW), Binding::None],
+    right: [Binding::from(KeyCode::KeyA), Binding::None],
+    backward: [Binding::from(KeyCode::KeyS), Binding::None],
+    left: [Binding::from(KeyCode::KeyD), Binding::None],
 };
 
-/// A preset to map buttons as 2-dimensional input.
+Bindings::spawn((
+    Cardinal {
+        north: settings.forward[0],
+        east: settings.right[0],
+        south: settings.backward[0],
+        west: settings.left[0],
+    },
+    Cardinal {
+        north: settings.forward[1],
+        east: settings.right[1],
+        south: settings.backward[1],
+        west: settings.left[1],
+    },
+));
+
+/// Bindings for actions.
 ///
-/// Uses [`SwizzleAxis`] and [`Negate`] to bind inputs to cardinal directions.
+/// Represented as arrays because in games you usually
+/// have 2 or 3 bindings for a single action.
 ///
-/// In Bevy's 3D space, the -Z axis points forward and the +Z axis points
-/// toward the camera. To map movement correctly in 3D space for [`Transform::translation`],
-/// you will need to invert Y and apply it to Z inside your observer.
-///
-/// See also [`Axial`], [`Bidirectional`] and [`Spatial`].
-///
-/// # Examples
-///
-/// Map keyboard inputs into a 2D movement action.
-///
-/// ```
-/// use bevy::prelude::*;
-/// use bevy_enhanced_input::prelude::*;
-///
-/// fn binding(
-///     trigger: Trigger<Binding<Player>>,
-///     settings: Res<KeyboardSettings>,
-///     mut players: Query<&mut Actions<Player>>,
-/// ) {
-///     let mut actions = players.get_mut(trigger.target()).unwrap();
-///     actions.bind::<Move>().to(Cardinal {
-///         north: &settings.forward,
-///         east: &settings.right,
-///         south: &settings.backward,
-///         west: &settings.left,
-///     });
-/// }
-///
-/// // We use `KeyCode` here because we are only interested in key presses.
-/// // But you can also use `Input` if you want to e.g.
-/// // combine mouse and keyboard input sources.
-/// #[derive(Resource)]
-/// struct KeyboardSettings {
-///     forward: Vec<KeyCode>,
-///     right: Vec<KeyCode>,
-///     backward: Vec<KeyCode>,
-///     left: Vec<KeyCode>,
-/// }
-///
-/// #[derive(InputContext)]
-/// struct Player;
-///
-/// #[derive(Debug, InputAction)]
-/// #[input_action(output = Vec2)]
-/// struct Move;
-/// ```
-#[derive(Debug, Clone, Copy)]
-pub struct Cardinal<I: IntoBindings> {
-    pub north: I,
-    pub east: I,
-    pub south: I,
-    pub west: I,
+/// Usually stored as a resource.
+#[derive(Resource, Serialize, Deserialize)]
+struct InputSettings {
+    forward: [Binding; 2],
+    right: [Binding; 2],
+    backward: [Binding; 2],
+    left: [Binding; 2],
 }
+```
+*/
 
-impl Cardinal<KeyCode> {
-    /// Maps WASD keys as 2-dimensional input.
-    ///
-    /// See also [`Self::arrow_keys`].
-    #[must_use]
-    pub fn wasd_keys() -> Self {
-        Self {
-            north: KeyCode::KeyW,
-            west: KeyCode::KeyA,
-            south: KeyCode::KeyS,
-            east: KeyCode::KeyD,
-        }
-    }
+pub mod axial;
+pub mod bidirectional;
+pub mod cardinal;
+pub mod ordinal;
+pub mod spatial;
 
-    /// Maps keyboard arrow keys as 2-dimensional input.
-    ///
-    /// See also [`Self::wasd_keys`].
-    #[must_use]
-    pub fn arrow_keys() -> Self {
-        Self {
-            north: KeyCode::ArrowUp,
-            west: KeyCode::ArrowLeft,
-            south: KeyCode::ArrowDown,
-            east: KeyCode::ArrowRight,
-        }
-    }
-}
-
-impl Cardinal<GamepadButton> {
-    /// Maps D-pad as 2-dimensional input.
-    ///
-    /// See also [`Self::wasd_keys`].
-    #[must_use]
-    pub fn dpad_buttons() -> Self {
-        Self {
-            north: GamepadButton::DPadUp,
-            west: GamepadButton::DPadLeft,
-            south: GamepadButton::DPadDown,
-            east: GamepadButton::DPadRight,
-        }
-    }
-}
-
-impl<I: IntoBindings> IntoBindings for Cardinal<I> {
-    fn into_bindings(self) -> impl Iterator<Item = InputBinding> {
-        // Y
-        let north = self
-            .north
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(SwizzleAxis::YXZ));
-
-        // -X
-        let west = self
-            .west
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(Negate::all()));
-
-        // -Y
-        let south = self
-            .south
-            .into_bindings()
-            .map(|binding| binding.with_modifiers((Negate::all(), SwizzleAxis::YXZ)));
-
-        // X
-        let east = self.east.into_bindings();
-
-        north.chain(east).chain(south).chain(west)
-    }
-}
-
-/// A preset to map axes as 2-dimensional input.
+/// Helper trait for attaching a bundle to a preset.
 ///
-/// Uses [`SwizzleAxis`] to bind inputs to axes.
-///
-/// See also [`Cardinal`].
-///
-/// # Examples
-///
-/// Maps gamepad axes into a 2D movement action.
-///
-/// ```
-/// use bevy::prelude::*;
-/// use bevy_enhanced_input::prelude::*;
-///
-/// fn binding(
-///     trigger: Trigger<Binding<Player>>,
-///     settings: Res<GamepadSettings>,
-///     mut players: Query<&mut Actions<Player>>,
-/// ) {
-///     let mut actions = players.get_mut(trigger.target()).unwrap();
-///     actions.bind::<Move>().to(Axial {
-///         x: &settings.horizontal_movement,
-///         y: &settings.vertical_movement,
-///     });
-/// }
-///
-/// #[derive(Resource)]
-/// struct GamepadSettings {
-///     horizontal_movement: Vec<GamepadAxis>,
-///     vertical_movement: Vec<GamepadAxis>,
-/// }
-///
-/// #[derive(InputContext)]
-/// struct Player;
-///
-/// #[derive(Debug, InputAction)]
-/// #[input_action(output = Vec2)]
-/// struct Move;
-/// ```
-#[derive(Debug, Clone, Copy)]
-pub struct Axial<I: IntoBindings> {
-    pub x: I,
-    pub y: I,
-}
+/// See the module documentation for a usage example.
+pub trait WithBundle<T> {
+    type Output;
 
-impl Axial<GamepadAxis> {
-    /// Maps left stick as 2-dimensional input.
-    ///
-    /// See also [`Self::right_stick`].
-    pub fn left_stick() -> Self {
-        Self {
-            x: GamepadAxis::LeftStickX,
-            y: GamepadAxis::LeftStickY,
-        }
-    }
-
-    /// Maps right stick as 2-dimensional input.
-    ///
-    /// See also [`Self::left_stick`].
-    pub fn right_stick() -> Self {
-        Self {
-            x: GamepadAxis::RightStickX,
-            y: GamepadAxis::RightStickY,
-        }
-    }
-}
-
-impl<I: IntoBindings> IntoBindings for Axial<I> {
-    fn into_bindings(self) -> impl Iterator<Item = InputBinding> {
-        let x = self.x.into_bindings();
-        let y = self
-            .y
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(SwizzleAxis::YXZ));
-
-        x.chain(y)
-    }
-}
-
-/// A preset to map buttons as 1-dimensional input.
-///
-/// Positive binding will be passed as is and negative will be reversed using [`Negate`].
-///
-/// See also [`Cardinal`] and [`Spatial`].
-#[derive(Debug, Clone, Copy)]
-pub struct Bidirectional<I: IntoBindings> {
-    pub positive: I,
-    pub negative: I,
-}
-
-impl<I: IntoBindings> IntoBindings for Bidirectional<I> {
-    fn into_bindings(self) -> impl Iterator<Item = InputBinding> {
-        let positive = self.positive.into_bindings();
-        let negative = self
-            .negative
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(Negate::all()));
-
-        positive.chain(negative)
-    }
-}
-
-/// A preset to map buttons as 3-dimensional input.
-///
-/// Uses [`SwizzleAxis`] and [`Negate`] to bind inputs to the Y and Z directions.
-///
-/// See also [`Cardinal`] and [`Bidirectional`].
-///
-/// # Examples
-///
-/// Map keyboard inputs into a 3D movement action.
-///
-/// ```
-/// use bevy::prelude::*;
-/// use bevy_enhanced_input::prelude::*;
-///
-/// fn binding(
-///     trigger: Trigger<Binding<FlyCamera>>,
-///     settings: Res<KeyboardSettings>,
-///     mut cameras: Query<&mut Actions<FlyCamera>>,
-/// ) {
-///     let mut actions = cameras.get_mut(trigger.target()).unwrap();
-///     actions.bind::<Move>().to(Spatial {
-///         forward: &settings.forward,
-///         right: &settings.right,
-///         backward: &settings.backward,
-///         left: &settings.left,
-///         up: &settings.up,
-///         down: &settings.down,
-///     });
-/// }
-///
-/// // We use `KeyCode` here because we are only interested in key presses.
-/// // But you can also use `Input` if you want to e.g.
-/// // combine mouse and keyboard input sources.
-/// #[derive(Resource)]
-/// struct KeyboardSettings {
-///     forward: Vec<KeyCode>,
-///     right: Vec<KeyCode>,
-///     backward: Vec<KeyCode>,
-///     left: Vec<KeyCode>,
-///     up: Vec<KeyCode>,
-///     down: Vec<KeyCode>,
-/// }
-///
-/// #[derive(InputContext)]
-/// struct FlyCamera;
-///
-/// #[derive(Debug, InputAction)]
-/// #[input_action(output = Vec3)]
-/// struct Move;
-/// ```
-#[derive(Debug, Clone, Copy)]
-pub struct Spatial<I: IntoBindings> {
-    pub forward: I,
-    pub backward: I,
-    pub left: I,
-    pub right: I,
-    pub up: I,
-    pub down: I,
-}
-
-impl Spatial<KeyCode> {
-    /// Maps WASD keys for horizontal (XZ) inputs and takes in up/down mappings.
-    ///
-    /// See also [`Self::arrows_and`].
-    pub fn wasd_and(up: KeyCode, down: KeyCode) -> Self {
-        Spatial {
-            forward: KeyCode::KeyW,
-            backward: KeyCode::KeyS,
-            left: KeyCode::KeyA,
-            right: KeyCode::KeyD,
-            up,
-            down,
-        }
-    }
-
-    /// Maps arrow keys for horizontal (XZ) inputs and takes in up/down mappings.
-    ///
-    /// See also [`Self::wasd_and`].
-    pub fn arrows_and(up: KeyCode, down: KeyCode) -> Self {
-        Spatial {
-            forward: KeyCode::ArrowUp,
-            backward: KeyCode::ArrowDown,
-            left: KeyCode::ArrowLeft,
-            right: KeyCode::ArrowRight,
-            up,
-            down,
-        }
-    }
-}
-
-impl<I: IntoBindings> IntoBindings for Spatial<I> {
-    fn into_bindings(self) -> impl Iterator<Item = InputBinding> {
-        // Z
-        let backward = self
-            .backward
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(SwizzleAxis::ZYX));
-
-        // -Z
-        let forward = self
-            .forward
-            .into_bindings()
-            .map(|binding| binding.with_modifiers((Negate::all(), SwizzleAxis::ZYX)));
-
-        // X
-        let right = self.right.into_bindings();
-
-        // -X
-        let left = self
-            .left
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(Negate::all()));
-
-        // Y
-        let up = self
-            .up
-            .into_bindings()
-            .map(|binding| binding.with_modifiers(SwizzleAxis::YXZ));
-
-        // -Y
-        let down = self
-            .down
-            .into_bindings()
-            .map(|binding| binding.with_modifiers((Negate::all(), SwizzleAxis::YXZ)));
-
-        backward
-            .chain(forward)
-            .chain(right)
-            .chain(left)
-            .chain(up)
-            .chain(down)
-    }
+    /// Returns a new instance where the given bundle is added to each preset bundle.
+    fn with(self, bundle: T) -> Self::Output;
 }
