@@ -43,6 +43,12 @@ impl Tap {
         self.time_kind = kind;
         self
     }
+
+    /// Returns the associated timer.
+    #[must_use]
+    pub fn timer(&self) -> &Timer {
+        &self.timer
+    }
 }
 
 impl InputCondition for Tap {
@@ -53,7 +59,7 @@ impl InputCondition for Tap {
         value: ActionValue,
     ) -> ActionState {
         let last_actuated = self.actuated;
-        let finished = self.timer.finished();
+        let finished = self.timer.is_finished();
         self.actuated = value.is_actuated(self.actuation);
         if self.actuated {
             self.timer.tick(time.delta_kind(self.time_kind));
@@ -64,7 +70,7 @@ impl InputCondition for Tap {
         if last_actuated && !self.actuated && !finished {
             // Only trigger if pressed then released quickly enough.
             ActionState::Fired
-        } else if self.timer.finished() {
+        } else if self.timer.is_finished() {
             // Once we pass the threshold halt all triggering until released.
             ActionState::None
         } else if self.actuated {

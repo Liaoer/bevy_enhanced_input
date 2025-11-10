@@ -1,4 +1,15 @@
-//! One context applied on top of another and overrides some of the bindings.
+//! Demonstrates the concept of context layering in input handling.
+//! One context can be applied on top of another, overriding some of the bindings.
+//!
+//! The [`ContextPriority`] component is used to determine the order of contexts,
+//! with higher priority contexts taking precedence over lower priority ones.
+//! This influences the order in which actions are evaluated and inputs are consumed.
+//! See [`ActionSettings::consume_input`] for more details and control over this behavior.
+//!
+//! In this example, we have a [`Player`] context that allows basic movement and jumping.
+//! When the player enters a vehicle, we add a [`Driving`] context on top of the [`Player`] context.
+//! The [`Driving`] context overrides the jump action with a brake action and adds actions for entering
+//! and exiting the vehicle.
 
 use bevy::prelude::*;
 use bevy_enhanced_input::prelude::*;
@@ -22,7 +33,7 @@ fn spawn(mut commands: Commands) {
         Player,
         actions!(Player[
             (
-                Action::<Move>::new(),
+                Action::<Movement>::new(),
                 DeadZone::default(),
                 Bindings::spawn((Cardinal::wasd_keys(), Axial::left_stick())),
             ),
@@ -38,20 +49,20 @@ fn spawn(mut commands: Commands) {
     ));
 }
 
-fn apply_movement(trigger: Trigger<Fired<Move>>) {
-    info!("moving: {}", trigger.value);
+fn apply_movement(movement: On<Fire<Movement>>) {
+    info!("moving: {}", movement.value);
 }
 
-fn jump(_trigger: Trigger<Started<Jump>>) {
+fn jump(_on: On<Start<Jump>>) {
     info!("jumping");
 }
 
-fn enter_car(trigger: Trigger<Started<EnterCar>>, mut commands: Commands) {
+fn enter_car(enter: On<Start<EnterCar>>, mut commands: Commands) {
     // `Player` has lower priority, so `Brake` and `ExitCar` consume inputs first,
-    // preventing `Rotate` and `EnterWater` from being triggered.
+    // preventing `Rotate` and `EnterCar` from being triggered.
     // The consuming behavior can be configured using `ActionSettings` component.
     info!("entering car");
-    commands.entity(trigger.target()).insert((
+    commands.entity(enter.context).insert((
         Driving,
         ContextPriority::<Driving>::new(1),
         actions!(Driving[
@@ -62,7 +73,7 @@ fn enter_car(trigger: Trigger<Started<EnterCar>>, mut commands: Commands) {
             (
                 Action::<ExitCar>::new(),
                 ActionSettings {
-                    // We set `require_reset` to `true` because `EnterWater` action uses the same input,
+                    // We set `require_reset` to `true` because `EnterCar` action uses the same input,
                     // and we want it to be triggerable only after the button is released.
                     require_reset: true,
                     ..Default::default()
@@ -73,14 +84,14 @@ fn enter_car(trigger: Trigger<Started<EnterCar>>, mut commands: Commands) {
     ));
 }
 
-fn brake(_trigger: Trigger<Fired<Brake>>) {
+fn brake(_on: On<Fire<Brake>>) {
     info!("braking");
 }
 
-fn exit_car(trigger: Trigger<Started<ExitCar>>, mut commands: Commands) {
+fn exit_car(exit: On<Start<ExitCar>>, mut commands: Commands) {
     info!("exiting car");
     commands
-        .entity(trigger.target())
+        .entity(exit.context)
         .remove_with_requires::<Driving>() // Necessary to fully remove the context.
         .despawn_related::<Actions<Driving>>();
 }
@@ -90,7 +101,7 @@ struct Player;
 
 #[derive(InputAction)]
 #[action_output(Vec2)]
-struct Move;
+struct Movement;
 
 #[derive(InputAction)]
 #[action_output(bool)]

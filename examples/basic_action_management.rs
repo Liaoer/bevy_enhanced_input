@@ -1,6 +1,15 @@
-//! Simple fly camera with a single context.
+//! Demonstrates basic mapping between inputs and actions.
+//!
+//! This example uses a simple fly camera with a single context
+//! to demonstrate how to set up actions, define keybinds and respond to actions
+//! to modify the state of your application.
 
-use bevy::{prelude::*, window::CursorGrabMode};
+use core::f32::consts::{FRAC_PI_2, FRAC_PI_8};
+
+use bevy::{
+    prelude::*,
+    window::{CursorGrabMode, CursorOptions},
+};
 use bevy_enhanced_input::prelude::*;
 
 fn main() {
@@ -8,9 +17,10 @@ fn main() {
         .add_plugins((DefaultPlugins, EnhancedInputPlugin))
         .add_input_context::<FlyCam>() // All contexts should be registered.
         .add_observer(apply_movement)
+        .add_observer(rotate)
+        .add_observer(zoom)
         .add_observer(capture_cursor)
         .add_observer(release_cursor)
-        .add_observer(rotate)
         .add_systems(Startup, setup)
         .run();
 }
@@ -19,9 +29,9 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut window: Single<&mut Window>,
+    mut cursor_options: Single<&mut CursorOptions>,
 ) {
-    grab_cursor(&mut window, true);
+    grab_cursor(&mut cursor_options, true);
 
     // Spawn a camera with an input context.
     commands.spawn((
@@ -32,7 +42,7 @@ fn setup(
         // Actions are related to specific context since a single entity can have multiple contexts.
         actions!(FlyCam[
             (
-                Action::<Move>::new(),
+                Action::<Movement>::new(),
                 // Conditions and modifiers as components.
                 DeadZone::default(), // Apply non-uniform normalization that works for both digital and analog inputs, otherwise diagonal movement will be faster.
                 SmoothNudge::default(), // Make movement smooth and independent of the framerate. To only make it framerate-independent, use `DeltaScale`.
@@ -43,15 +53,26 @@ fn setup(
                     // Bindings like WASD or sticks are very common,
                     // so we provide built-in `SpawnableList`s to assign all keys/axes at once.
                     Cardinal::wasd_keys(),
-                    Axial::left_stick()
+                    Axial::left_stick(),
                 )),
             ),
             (
                 Action::<Rotate>::new(),
                 Bindings::spawn((
+                    // Bevy requires single entities to be wrapped in `Spawn`.
                     // You can attach modifiers to individual bindings as well.
                     Spawn((Binding::mouse_motion(), Scale::splat(0.1), Negate::all())),
                     Axial::right_stick().with((Scale::splat(2.0), Negate::x())),
+                )),
+            ),
+            (
+                Action::<Zoom>::new(),
+                Scale::splat(0.1),
+                Bindings::spawn((
+                    // In Bevy, vertical scrolling maps to the Y axis,
+                    // so we apply `SwizzleAxis` to map it to our 1-dimensional action.
+                    Spawn((Binding::mouse_wheel(), SwizzleAxis::YXZ)),
+                    Bidirectional::up_down_dpad(),
                 )),
             ),
             // For bindings we also have a macro similar to `children!`.
@@ -79,8 +100,8 @@ fn setup(
     ));
 }
 
-fn apply_movement(trigger: Trigger<Fired<Move>>, mut transforms: Query<&mut Transform>) {
-    let mut transform = transforms.get_mut(trigger.target()).unwrap();
+fn apply_movement(movement: On<Fire<Movement>>, mut transforms: Query<&mut Transform>) {
+    let mut transform = transforms.get_mut(movement.context).unwrap();
 
     // Move to the camera direction.
     let rotation = transform.rotation;
@@ -88,45 +109,59 @@ fn apply_movement(trigger: Trigger<Fired<Move>>, mut transforms: Query<&mut Tran
     // Movement consists of X and -Z components, so swap Y and Z with negation.
     // We could do it with modifiers, but it wold be weird for an action to return
     // a `Vec3` like this, so we doing it inside the function.
-    let mut movement = trigger.value.extend(0.0).xzy();
-    movement.z = -movement.z;
+    let mut velocity = movement.value.extend(0.0).xzy();
+    velocity.z = -velocity.z;
 
-    transform.translation += rotation * movement
+    transform.translation += rotation * velocity
 }
 
 fn rotate(
-    trigger: Trigger<Fired<Rotate>>,
-    mut players: Query<&mut Transform>,
-    window: Single<&Window>,
+    rotate: On<Fire<Rotate>>,
+    mut transforms: Query<&mut Transform>,
+    cursor_options: Single<&CursorOptions>,
 ) {
-    if window.cursor_options.visible {
+    if cursor_options.visible {
         return;
     }
 
-    let mut transform = players.get_mut(trigger.target()).unwrap();
+    let mut transform = transforms.get_mut(rotate.context).unwrap();
     let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
 
-    yaw += trigger.value.x.to_radians();
-    pitch += trigger.value.y.to_radians();
+    yaw += rotate.value.x.to_radians();
+    pitch += rotate.value.y.to_radians();
 
     transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
 }
 
-fn capture_cursor(_trigger: Trigger<Completed<CaptureCursor>>, mut window: Single<&mut Window>) {
-    grab_cursor(&mut window, true);
+fn zoom(zoom: On<Fire<Zoom>>, mut projections: Query<&mut Projection>) {
+    let mut projection = projections.get_mut(zoom.context).unwrap();
+    let Projection::Perspective(projection) = &mut *projection else {
+        panic!("camera should be perspective");
+    };
+    projection.fov = (projection.fov + zoom.value).clamp(FRAC_PI_8, FRAC_PI_2);
 }
 
-fn release_cursor(_trigger: Trigger<Completed<ReleaseCursor>>, mut window: Single<&mut Window>) {
-    grab_cursor(&mut window, false);
+fn capture_cursor(
+    _on: On<Complete<CaptureCursor>>,
+    mut cursor_options: Single<&mut CursorOptions>,
+) {
+    grab_cursor(&mut cursor_options, true);
 }
 
-fn grab_cursor(window: &mut Window, grab: bool) {
-    window.cursor_options.grab_mode = if grab {
+fn release_cursor(
+    _on: On<Complete<ReleaseCursor>>,
+    mut cursor_options: Single<&mut CursorOptions>,
+) {
+    grab_cursor(&mut cursor_options, false);
+}
+
+fn grab_cursor(cursor_options: &mut CursorOptions, grab: bool) {
+    cursor_options.grab_mode = if grab {
         CursorGrabMode::Confined
     } else {
         CursorGrabMode::None
     };
-    window.cursor_options.visible = !grab;
+    cursor_options.visible = !grab;
 }
 
 // Since it's possible to have multiple input contexts on a single entity,
@@ -139,7 +174,15 @@ struct FlyCam;
 // The only attribute is `action_output`, which defines the output type.
 #[derive(InputAction)]
 #[action_output(Vec2)]
-struct Move;
+struct Movement;
+
+#[derive(InputAction)]
+#[action_output(Vec2)]
+struct Rotate;
+
+#[derive(InputAction)]
+#[action_output(f32)]
+struct Zoom;
 
 #[derive(InputAction)]
 #[action_output(bool)]
@@ -148,7 +191,3 @@ struct CaptureCursor;
 #[derive(InputAction)]
 #[action_output(bool)]
 struct ReleaseCursor;
-
-#[derive(InputAction)]
-#[action_output(Vec2)]
-struct Rotate;

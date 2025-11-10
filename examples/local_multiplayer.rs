@@ -1,4 +1,8 @@
-//! Two players that use the same context type, but with different bindings.
+//! Demonstrates how to set up local multiplayer input handling.
+//!
+//! The same context ([`Player`]) is used for both players, but each player has their own unique entity.
+//! This allows us to enable or disable players independently and reuse the same entity for gameplay,
+//! and assign unique input bindings to each player.
 
 use bevy::{
     input::gamepad::{GamepadConnection, GamepadConnectionEvent},
@@ -63,12 +67,12 @@ fn spawn(
     ));
 }
 
-fn apply_movement(trigger: Trigger<Fired<Move>>, mut players: Query<&mut Transform>) {
-    let mut transform = players.get_mut(trigger.target()).unwrap();
+fn apply_movement(movement: On<Fire<Movement>>, mut players: Query<&mut Transform>) {
+    let mut transform = players.get_mut(movement.context).unwrap();
 
     // Adjust axes for top-down movement.
-    transform.translation.z -= trigger.value.x;
-    transform.translation.x -= trigger.value.y;
+    transform.translation.z -= movement.value.x;
+    transform.translation.x -= movement.value.y;
 
     // Prevent from moving out of plane.
     transform.translation.z = transform.translation.z.clamp(-10.0, 10.0);
@@ -76,18 +80,18 @@ fn apply_movement(trigger: Trigger<Fired<Move>>, mut players: Query<&mut Transfo
 }
 
 fn update_gamepads(
-    mut event_reader: EventReader<GamepadConnectionEvent>,
+    mut gamepad_connections: MessageReader<GamepadConnectionEvent>,
     mut players: Query<&mut GamepadDevice>,
 ) {
-    for event in event_reader.read() {
-        match event.connection {
+    for connection in gamepad_connections.read() {
+        match connection.connection {
             GamepadConnection::Connected { .. } => {
                 // Assign to a player without a gamepad.
                 if let Some(mut gamepad) = players
                     .iter_mut()
                     .find(|gamepad| **gamepad == GamepadDevice::None)
                 {
-                    *gamepad = event.gamepad.into();
+                    *gamepad = connection.gamepad.into();
                 }
             }
             GamepadConnection::Disconnected => {
@@ -96,7 +100,7 @@ fn update_gamepads(
                 // detect which player don't have a gamepad.
                 if let Some(mut gamepad) = players
                     .iter_mut()
-                    .find(|gamepad| **gamepad == event.gamepad.into())
+                    .find(|gamepad| **gamepad == connection.gamepad.into())
                 {
                     *gamepad = GamepadDevice::None;
                 }
@@ -115,7 +119,7 @@ fn player_bundle(
     // Assign different bindings based on the player index.
     let move_bindings = match player {
         Player::First => Bindings::spawn((Cardinal::wasd_keys(), Axial::left_stick())),
-        Player::Second => Bindings::spawn((Cardinal::arrow_keys(), Axial::left_stick())),
+        Player::Second => Bindings::spawn((Cardinal::arrows(), Axial::left_stick())),
     };
 
     (
@@ -126,7 +130,7 @@ fn player_bundle(
         transform,
         actions!(
             Player[(
-                Action::<Move>::new(),
+                Action::<Movement>::new(),
                 DeadZone::default(),
                 SmoothNudge::default(),
                 Scale::splat(0.4),
@@ -144,4 +148,4 @@ enum Player {
 
 #[derive(Debug, InputAction)]
 #[action_output(Vec2)]
-struct Move;
+struct Movement;

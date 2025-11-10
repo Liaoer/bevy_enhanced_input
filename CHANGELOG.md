@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.3] - 2025-11-05
+
+### Fixed
+
+- Links in docs.
+
+## [0.19.2] - 2025-10-30
+
+### Added
+
+- `Combo` input condition.
+- `Pulse::with_initial_delay` and `Pulse::initial_delay` to add special delay before the first repeat.
+- `with_mod_keys()` method to all preset types (`Cardinal`, `Bidirectional`, `Ordinal`, `Spatial`, `Axial`) to apply keyboard modifiers to all bindings in the preset.
+
+### Changed
+
+- Warn about bindings without associated actions.
+
+## [0.19.1] - 2025-10-13
+
+### Changed
+
+- Use `ShortName` for logging.
+
+### Fixed
+
+- `Bidirectional::up_down_arrow()` was using left and right arrows.
+
+## [0.19.0] - 2025-10-02
+
+### Added
+
+- `From` impl to primitive types for `ActionValue`.
+
+### Changed
+
+- Update to Bevy 0.17.0.
+- Rename `EnhancedInputSet` to `EnhancedInputSystems`.
+- Use present tense for all event names:
+  - `Pressed` -> `Press`.
+  - `Released` -> `Release`.
+  - `Fired` -> `Fire`.
+  - `Cancelled` -> `Cancel`.
+  - `Completed` -> `Complete`.
+  - `Started` -> `Start`.
+  Note that `Press`, `Release`, and `Cancel` collide with names from `bevy_picking` and present in both `bevy::prelude::*` and `bevy_enhanced_input::prelude::*`.
+  To disambiguate, import `bevy_enhanced_input::prelude::{*, Press, Release, Cancel}`.
+- Serde integration is now gated behind the `serialize` feature.
+- Warn on dimension mismatch instead of panicking.
+
+### Removed
+
+- `ActionOutput::unwrap_value`. Use `From` impl instead.
+
+## [0.18.2] - 2025-09-10
+
+### Fixed
+
+- `DuplicateRegistration` error when `ContextActivity` or `ContextPriority` are set as required context components by user.
+
+## [0.18.1] - 2025-09-01
+
+### Added
+
+- Added a component `ExternallyMocked` to exclude actions from being updated. These actions are updated manually by the user.
+
+### Changed
+
+- Made `ActionTime::update` public
+
+## [0.18.0] - 2025-08-26
+
+### Added
+
+- `Binding::AnyKey` to assign any button.
+- `Cooldown` input condition.
+- `timer` getter for conditions that contain one.
+
+### Changed
+
+- Print an error instead of panicking in `InputModKeys::with_mod_keys` when keyboard modifiers can't be applied.
+- Mocking can be used without `InputPlugin`.
+
+## [0.17.0] - 2025-08-18
+
+### Added
+
+- All events now include an `action` field with the entity of the action that triggered them.
+
+### Fixed
+
+- Target context entity on events triggered by action removals.
+
+## [0.16.0] - 2025-08-11
+
+### Added
+
+- `ContextActivity<C>` component to activate or deactivate context `C`.
+- `Bidirectional::left_right_dpad` and `Bidirectional::up_down_dpad`.
+
+### Changed
+
+- `bindings!` now properly works with trailing commas and no longer requires wrapping single elements in braces when mixed with tuples.
+- `Clone`, `PartialEq`, `Eq` and `Debug` are implemented for `ActionOf<C>` even if `C` doesn't implement them.
+- Don't trigger change detection on `Actions<C>` on sorting if it's already sorted.
+- `InputAction` now requires `PartialEq`, and `Action<A>` implements `PartialEq`.
+- Rename `Bidirectional::horizontal_arrow_keys` into `Bidirectional::left_right_arrows`.
+- Rename `Bidirectional::vertical_arrow_keys` into `Bidirectional::up_down_arrows`.
+- Rename `Cardinal::arrow_keys` into `Cardinal::arrows`.
+- Rename `Cardinal::dpad_buttons` into `Cardinal::dpad`.
+- Rename `Ordinal::numpad_keys` into `Cardinal::numpad`.
+
+### Removed
+
+- `DeadZone::with_lower_threshold` and `DeadZone::with_upper_threshold`. All fields are public, just use struct initialization syntax.
+
+## [0.15.3] - 2025-08-07
+
+### Added
+
+- Helpers for wasd and arrow keys for `Bidirectional` preset.
+
 ## [0.15.2] - 2025-07-28
 
 ### Added
@@ -354,25 +476,35 @@ This update features a big rewrite into a component-based API. The core concepts
 
 Initial release.
 
-[unreleased]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.2...HEAD
-[0.15.2]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.1...v0.15.2
-[0.15.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.15.0...v0.15.1
-[0.15.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.14.1...v0.15.0
-[0.14.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.14.0...v0.14.1
-[0.14.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.13.0...v0.14.0
-[0.13.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.12.0...v0.13.0
-[0.12.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.9.0...v0.10.0
-[0.9.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.7.2...v0.8.0
-[0.7.2]: https://github.com/projectharmonia/bevy_replicon/compare/v0.7.1...v0.7.2
-[0.7.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.7.0...v0.7.1
-[0.7.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/projectharmonia/bevy_replicon/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/projectharmonia/bevy_replicon/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/projectharmonia/bevy_replicon/releases/tag/v0.1.0
+[unreleased]: https://github.com/simgine/bevy_replicon/compare/v0.19.3...HEAD
+[0.19.3]: https://github.com/simgine/bevy_replicon/compare/v0.19.2...v0.19.3
+[0.19.2]: https://github.com/simgine/bevy_replicon/compare/v0.19.1...v0.19.2
+[0.19.1]: https://github.com/simgine/bevy_replicon/compare/v0.19.0...v0.19.1
+[0.19.0]: https://github.com/simgine/bevy_replicon/compare/v0.18.2...v0.19.0
+[0.18.2]: https://github.com/simgine/bevy_replicon/compare/v0.18.1...v0.18.2
+[0.18.1]: https://github.com/simgine/bevy_replicon/compare/v0.18.0...v0.18.1
+[0.18.0]: https://github.com/simgine/bevy_replicon/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/simgine/bevy_replicon/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/simgine/bevy_replicon/compare/v0.15.3...v0.16.0
+[0.15.3]: https://github.com/simgine/bevy_replicon/compare/v0.15.2...v0.15.3
+[0.15.2]: https://github.com/simgine/bevy_replicon/compare/v0.15.1...v0.15.2
+[0.15.1]: https://github.com/simgine/bevy_replicon/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/simgine/bevy_replicon/compare/v0.14.1...v0.15.0
+[0.14.1]: https://github.com/simgine/bevy_replicon/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/simgine/bevy_replicon/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/simgine/bevy_replicon/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/simgine/bevy_replicon/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/simgine/bevy_replicon/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/simgine/bevy_replicon/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/simgine/bevy_replicon/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/simgine/bevy_replicon/compare/v0.7.2...v0.8.0
+[0.7.2]: https://github.com/simgine/bevy_replicon/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/simgine/bevy_replicon/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/simgine/bevy_replicon/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/simgine/bevy_replicon/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/simgine/bevy_replicon/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/simgine/bevy_replicon/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/simgine/bevy_replicon/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/simgine/bevy_replicon/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/simgine/bevy_replicon/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/simgine/bevy_replicon/releases/tag/v0.1.0

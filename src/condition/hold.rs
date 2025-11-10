@@ -51,6 +51,12 @@ impl Hold {
         self.time_kind = kind;
         self
     }
+
+    /// Returns the associated timer.
+    #[must_use]
+    pub fn timer(&self) -> &Timer {
+        &self.timer
+    }
 }
 
 impl InputCondition for Hold {
@@ -67,7 +73,7 @@ impl InputCondition for Hold {
             self.timer.reset();
         }
 
-        if self.timer.finished() {
+        if self.timer.is_finished() {
             if self.timer.just_finished() || !self.one_shot {
                 ActionState::Fired
             } else {

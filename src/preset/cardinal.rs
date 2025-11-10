@@ -1,4 +1,8 @@
-use bevy::{ecs::spawn::SpawnableList, prelude::*};
+use bevy::{
+    ecs::spawn::SpawnableList,
+    prelude::*,
+    ptr::{MovingPtr, move_as_ptr},
+};
 
 use crate::prelude::*;
 
@@ -42,7 +46,7 @@ impl Cardinal<Binding, Binding, Binding, Binding> {
 
     /// Maps keyboard arrow keys as 2-dimensional input.
     #[must_use]
-    pub fn arrow_keys() -> Self {
+    pub fn arrows() -> Self {
         Self {
             north: KeyCode::ArrowUp.into(),
             west: KeyCode::ArrowLeft.into(),
@@ -50,12 +54,23 @@ impl Cardinal<Binding, Binding, Binding, Binding> {
             east: KeyCode::ArrowRight.into(),
         }
     }
+
+    /// Applies keyboard modifiers to all bindings.
+    #[must_use]
+    pub fn with_mod_keys(self, mod_keys: ModKeys) -> Self {
+        Self {
+            north: self.north.with_mod_keys(mod_keys),
+            east: self.east.with_mod_keys(mod_keys),
+            south: self.south.with_mod_keys(mod_keys),
+            west: self.west.with_mod_keys(mod_keys),
+        }
+    }
 }
 
 impl Cardinal<Binding, Binding, Binding, Binding> {
     /// Maps D-pad as 2-dimensional input.
     #[must_use]
-    pub fn dpad_buttons() -> Self {
+    pub fn dpad() -> Self {
         Self {
             north: GamepadButton::DPadUp.into(),
             west: GamepadButton::DPadLeft.into(),
@@ -66,18 +81,24 @@ impl Cardinal<Binding, Binding, Binding, Binding> {
 }
 
 impl<N: Bundle, E: Bundle, S: Bundle, W: Bundle> SpawnableList<BindingOf> for Cardinal<N, E, S, W> {
-    fn spawn(self, world: &mut World, entity: Entity) {
+    fn spawn(this: MovingPtr<'_, Self>, world: &mut World, entity: Entity) {
+        let cardinal = this.read();
         let x = Bidirectional {
-            positive: self.east,
-            negative: self.west,
+            positive: cardinal.east,
+            negative: cardinal.west,
         };
-        x.spawn(world, entity);
+
+        move_as_ptr!(x);
+        SpawnableList::spawn(x, world, entity);
 
         let y = Bidirectional {
-            positive: self.north,
-            negative: self.south,
-        };
-        y.with(SwizzleAxis::YXZ).spawn(world, entity);
+            positive: cardinal.north,
+            negative: cardinal.south,
+        }
+        .with(SwizzleAxis::YXZ);
+
+        move_as_ptr!(y);
+        SpawnableList::spawn(y, world, entity);
     }
 
     fn size_hint(&self) -> usize {

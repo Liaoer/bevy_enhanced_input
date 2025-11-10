@@ -1,6 +1,9 @@
-use bevy::{ecs::spawn::SpawnableList, prelude::*};
-
 use crate::prelude::*;
+use bevy::{
+    ecs::spawn::SpawnableList,
+    prelude::*,
+    ptr::{MovingPtr, move_as_ptr},
+};
 
 /// A preset to map 6 buttons as 3-dimensional input.
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +57,19 @@ impl Spatial<Binding, Binding, Binding, Binding, Binding, Binding> {
             down: down.into(),
         }
     }
+
+    /// Applies keyboard modifiers to all bindings.
+    #[must_use]
+    pub fn with_mod_keys(self, mod_keys: ModKeys) -> Self {
+        Self {
+            forward: self.forward.with_mod_keys(mod_keys),
+            backward: self.backward.with_mod_keys(mod_keys),
+            left: self.left.with_mod_keys(mod_keys),
+            right: self.right.with_mod_keys(mod_keys),
+            up: self.up.with_mod_keys(mod_keys),
+            down: self.down.with_mod_keys(mod_keys),
+        }
+    }
 }
 
 impl<F, B, L, R, U, D> SpawnableList<BindingOf> for Spatial<F, B, L, R, U, D>
@@ -65,20 +81,26 @@ where
     U: Bundle,
     D: Bundle,
 {
-    fn spawn(self, world: &mut World, entity: Entity) {
+    fn spawn(this: MovingPtr<'_, Self>, world: &mut World, entity: Entity) {
+        let spatial = this.read();
         let xy = Cardinal {
-            north: self.up,
-            east: self.right,
-            south: self.down,
-            west: self.left,
+            north: spatial.up,
+            east: spatial.right,
+            south: spatial.down,
+            west: spatial.left,
         };
-        xy.spawn(world, entity);
+
+        move_as_ptr!(xy);
+        SpawnableList::spawn(xy, world, entity);
 
         let z = Bidirectional {
-            positive: self.backward,
-            negative: self.forward,
-        };
-        z.with(SwizzleAxis::ZYX).spawn(world, entity);
+            positive: spatial.backward,
+            negative: spatial.forward,
+        }
+        .with(SwizzleAxis::ZYX);
+
+        move_as_ptr!(z);
+        SpawnableList::spawn(z, world, entity);
     }
 
     fn size_hint(&self) -> usize {

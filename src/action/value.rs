@@ -1,13 +1,16 @@
 use core::fmt::Debug;
 
 use bevy::prelude::*;
+#[cfg(feature = "serialize")]
 use serde::{Deserialize, Serialize};
 
 /// Value for [`Action<C>`](super::Action) in dynamically typed form.
 ///
 /// Updated from [`Bindings`](crate::prelude::Bindings) and optionally modified by
 /// [`modifiers`](crate::modifier), or overridden by [`ActionMock`](super::ActionMock) if present.
-#[derive(Component, Reflect, Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Component, Reflect, Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum ActionValue {
     Bool(bool),
     Axis1D(f32),
@@ -136,7 +139,9 @@ impl ActionValue {
 }
 
 /// A dimension discriminant for [`ActionValue`].
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Reflect, Ord, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum ActionValueDim {
     Bool,
     Axis1D,
@@ -177,6 +182,30 @@ impl From<(f32, f32)> for ActionValue {
 impl From<(f32, f32, f32)> for ActionValue {
     fn from(value: (f32, f32, f32)) -> Self {
         ActionValue::Axis3D(value.into())
+    }
+}
+
+impl From<ActionValue> for bool {
+    fn from(value: ActionValue) -> Self {
+        value.as_bool()
+    }
+}
+
+impl From<ActionValue> for f32 {
+    fn from(value: ActionValue) -> Self {
+        value.as_axis1d()
+    }
+}
+
+impl From<ActionValue> for Vec2 {
+    fn from(value: ActionValue) -> Self {
+        value.as_axis2d()
+    }
+}
+
+impl From<ActionValue> for Vec3 {
+    fn from(value: ActionValue) -> Self {
+        value.as_axis3d()
     }
 }
 

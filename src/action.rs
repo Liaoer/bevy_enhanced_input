@@ -1,3 +1,50 @@
+//! Actions represent high-level user intents, such as "Jump" or "Move Forward".
+//!
+//! Each action is represented by a new type that implements the [`InputAction`] trait.
+//! The trait defines the output type of the action, via the [`InputAction::Output`] associated type.
+//! Actions can output different types of values, such as `bool` for button-like actions
+//! (e.g., "Jump"), `f32` for single-axis actions (e.g., "Zoom"), or `Vec2`/`Vec3` for multi-axis actions
+//! (like "Movement").
+//!
+//! Actions belong to [contexts](crate::context) that group related actions together,
+//! allowing you to enable and disable actions based on the current game state.
+//!
+//! They are spawned as entities with the [`Action<C>`] component, where `C` is the action type,
+//! and related to the context entity via the [`ActionOf<C>`] relationship.
+//! The [`actions!`] macro can be used to conveniently spawn multiple actions at once.
+//!
+//! In turn, actions have input mappings defined by [binding](crate::binding) entities,
+//! which are related to the action entity via the [`BindingOf`] relationship.
+//!
+//! # Responding to actions
+//!
+//! When an action is evaluated, it produces various [action events](events) that indicate
+//! changes in the action's state.
+//! See the section on [push-style action handling](../index.html#push-style-responding-to-action-events)
+//! in the library documentation for more details.
+//!
+//! Similarly, you can check the current state and value of an action at any time using the
+//! [`Action<C>`], [`ActionState`], [`ActionValue`] and [`ActionTime`] components.
+//! See the section on [pull-style action handling](../index.html#pull-style-polling-action-state)
+//! in the library documentation for more details.
+//!
+//! # Configuring actions
+//!
+//! The behavior of actions can be customized using the [`ActionSettings`] component,
+//! which allows you to define accumulation behavior, input consumption, and reset requirements.
+//!
+//! The behavior of actions can also be modified via
+//! [modifiers](crate::modifier) that transform the action value during evaluation,
+//! or by using [input conditions](crate::condition) to control when actions are triggered.
+//!
+//! # Manually firing actions
+//!
+//! In addition to responding to user input, you can also manually set the state and value of actions
+//! using the [`ActionMock`] component or by directly modifying various components before [`EnhancedInputSystems`] are run.
+//!
+//! This is useful for simulating input during cutscenes,
+//! testing, networked replication, AI-controlled players, game replays, or other scenarios where you want to control the action state directly.
+
 pub mod events;
 pub mod fns;
 pub mod relationship;
@@ -6,55 +53,11 @@ pub mod value;
 use core::{any, fmt::Debug, time::Duration};
 
 use bevy::prelude::*;
-use log::trace;
+#[cfg(feature = "serialize")]
 use serde::{Deserialize, Serialize};
 
-use crate::{context::input_reader::PendingBindings, prelude::*};
+use crate::prelude::*;
 use fns::ActionFns;
-
-/// Resets action data and triggers corresponding events on removal.
-pub(crate) fn remove_action(
-    trigger: Trigger<OnRemove, ActionValue>,
-    mut commands: Commands,
-    mut pending: ResMut<PendingBindings>,
-    mut actions: Query<(
-        Option<&Bindings>,
-        &ActionSettings,
-        &ActionFns,
-        &mut ActionValue,
-        &mut ActionState,
-        &mut ActionEvents,
-        &mut ActionTime,
-    )>,
-    bindings: Query<&Binding>,
-) {
-    let Ok((action_bindings, settings, fns, mut value, mut state, mut events, mut time)) =
-        actions.get_mut(trigger.target())
-    else {
-        trace!("ignoring removal on `{}`", trigger.target());
-        return;
-    };
-
-    *time = Default::default();
-    events.set_if_neq(ActionEvents::new(*state, ActionState::None));
-    state.set_if_neq(Default::default());
-    value.set_if_neq(ActionValue::zero(value.dim()));
-
-    fns.trigger(
-        &mut commands,
-        trigger.target(),
-        *state,
-        *events,
-        *value,
-        *time,
-    );
-
-    if let Some(action_bindings) = action_bindings
-        && settings.require_reset
-    {
-        pending.extend(bindings.iter_many(action_bindings).copied());
-    }
-}
 
 /// Component that represents a user action.
 ///
@@ -91,6 +94,12 @@ impl<A: InputAction> Default for Action<A> {
     }
 }
 
+impl<A: InputAction> PartialEq for Action<A> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
 impl<A: InputAction> Action<A> {
     pub fn new() -> Self {
         Self::default()
@@ -109,80 +118,47 @@ impl<A: InputAction> Action<A> {
 /// # use bevy_enhanced_input::prelude::*;
 /// #[derive(InputAction)]
 /// #[action_output(Vec2)]
-/// struct Move;
+/// struct Movement;
 /// ```
 pub trait InputAction: 'static {
     /// What type of value this action will output.
     ///
     /// - Use [`bool`] for button-like actions (e.g., `Jump`).
     /// - Use [`f32`] for single-axis actions (e.g., `Zoom`).
-    /// - For multi-axis actions, like `Move`, use [`Vec2`] or [`Vec3`].
+    /// - For multi-axis actions, like `Movement`, use [`Vec2`] or [`Vec3`].
     type Output: ActionOutput;
 }
 
 /// Type which can be used as [`InputAction::Output`].
-pub trait ActionOutput: Into<ActionValue> + Default + Send + Sync + Debug + Clone + Copy {
+pub trait ActionOutput:
+    From<ActionValue> + Default + Send + Sync + Debug + Clone + Copy + PartialEq
+{
     /// Dimension of this output.
     ///
     /// Used for [`ActionValue`] initialization.
     const DIM: ActionValueDim;
-
-    /// Converts the value into the action output type.
-    ///
-    /// Used to write the value into [`Action<C>`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value represents a different type.
-    fn unwrap_value(value: ActionValue) -> Self;
 }
 
 impl ActionOutput for bool {
     const DIM: ActionValueDim = ActionValueDim::Bool;
-
-    fn unwrap_value(value: ActionValue) -> Self {
-        let ActionValue::Bool(value) = value else {
-            panic!("output value should be bool");
-        };
-        value
-    }
 }
 
 impl ActionOutput for f32 {
     const DIM: ActionValueDim = ActionValueDim::Axis1D;
-
-    fn unwrap_value(value: ActionValue) -> Self {
-        let ActionValue::Axis1D(value) = value else {
-            panic!("output value should be axis 1D");
-        };
-        value
-    }
 }
 
 impl ActionOutput for Vec2 {
     const DIM: ActionValueDim = ActionValueDim::Axis2D;
-
-    fn unwrap_value(value: ActionValue) -> Self {
-        let ActionValue::Axis2D(value) = value else {
-            panic!("output value should be axis 2D");
-        };
-        value
-    }
 }
 
 impl ActionOutput for Vec3 {
     const DIM: ActionValueDim = ActionValueDim::Axis3D;
-
-    fn unwrap_value(value: ActionValue) -> Self {
-        let ActionValue::Axis3D(value) = value else {
-            panic!("output value should be axis 3D");
-        };
-        value
-    }
 }
 
 /// Behavior configuration for [`Action<C>`].
-#[derive(Component, Reflect, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub struct ActionSettings {
     /// Accumulation behavior.
     ///
@@ -190,7 +166,7 @@ pub struct ActionSettings {
     pub accumulation: Accumulation,
 
     /// Require inputs to be inactive before the first activation and continue to consume them
-    /// even after context removal until inputs become inactive again.
+    /// even after context removal or deactivation until inputs become inactive again.
     ///
     /// This way new instances won't react to currently held inputs until they are released.
     /// This prevents unintended behavior where switching or layering contexts using the same key
@@ -202,7 +178,7 @@ pub struct ActionSettings {
     /// Specifies whether this action should swallow any [`Bindings`]
     /// bound to it or allow them to pass through to affect actions that evaluated later.
     ///
-    /// Actions are ordered by the maximum number of keyboard modifiers in their bindings.
+    /// Actions are ordered by the maximum number of [`ModKeys`] in their bindings.
     /// For example, an action with a `Ctrl + C` binding is evaluated before one with just
     /// a `C` binding. If actions have the same modifier count, they are ordered by their
     /// spawn order.
@@ -231,7 +207,9 @@ impl Default for ActionSettings {
 /// same most significant [`ActionState`] (excluding [`ActionState::None`]).
 ///
 /// Stored inside [`ActionSettings`].
-#[derive(Reflect, Debug, Default, Serialize, Deserialize, Clone, Copy)]
+#[derive(Reflect, Debug, Default, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum Accumulation {
     /// Cumulatively add the key values for each mapping.
     ///
@@ -252,20 +230,9 @@ pub enum Accumulation {
 /// or overridden by [`ActionMock`] if present.
 ///
 /// During evaluation, [`ActionEvents`] are derived from the previous and current state.
-#[derive(
-    Component,
-    Reflect,
-    Debug,
-    Default,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Clone,
-    Copy,
-)]
+#[derive(Component, Reflect, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum ActionState {
     /// Condition is not triggered.
     #[default]
@@ -286,7 +253,9 @@ pub enum ActionState {
 }
 
 /// Timing information for [`Action<C>`].
-#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub struct ActionTime {
     /// Time the action was in [`ActionState::Ongoing`] and [`ActionState::Fired`] states.
     pub elapsed_secs: f32,
@@ -296,7 +265,8 @@ pub struct ActionTime {
 }
 
 impl ActionTime {
-    pub(crate) fn update(&mut self, delta_secs: f32, state: ActionState) {
+    /// Updates the timers based on the given delta time and action state.
+    pub fn update(&mut self, delta_secs: f32, state: ActionState) {
         match state {
             ActionState::None => {
                 self.elapsed_secs = 0.0;
@@ -318,7 +288,7 @@ impl ActionTime {
 ///
 /// While active, input reading, conditions, and modifiers are skipped. Instead,
 /// the action reports the provided state and value. All state transition events
-/// (e.g., [`Started<A>`], [`Fired<A>`]) will still be triggered as usual.
+/// (e.g., [`Start<A>`], [`Fire<A>`]) will still be triggered as usual.
 ///
 /// Once the span expires, [`Self::enabled`] is set to `false`, and the action resumes
 /// the regular evaluation. The component is not removed automatically, allowing you
@@ -326,6 +296,11 @@ impl ActionTime {
 ///
 /// Mocking does not take effect immediately - it is applied during the next context evaluation.
 /// For more details, see the [evaluation](../index.html#evaluation) section in the quick start guide.
+///
+/// See also [`ExternallyMocked`](crate::context::ExternallyMocked) to manually control the action data.
+///
+/// If you only need mocking, you can disable [`InputPlugin`](bevy::input::InputPlugin) entirely.
+/// However, `bevy_input` is a required dependency because we use its input types elsewhere in this crate.
 ///
 /// # Examples
 ///
@@ -340,7 +315,7 @@ impl ActionTime {
 ///     Player,
 ///     actions!(Player[
 ///         (
-///             Action::<Move>::new(),
+///             Action::<Movement>::new(),
 ///             ActionMock::new(ActionState::Fired, Vec2::Y, Duration::from_secs(2)),
 ///             Bindings::spawn(Cardinal::wasd_keys()), // Bindings will be ignored while mocked.
 ///         ),
@@ -350,7 +325,7 @@ impl ActionTime {
 /// # struct Player;
 /// # #[derive(InputAction)]
 /// # #[action_output(Vec2)]
-/// # struct Move;
+/// # struct Movement;
 /// ```
 ///
 /// Mock previously spawned jump action for the next frame:
@@ -364,7 +339,9 @@ impl ActionTime {
 /// # #[derive(InputAction)]
 /// # #[action_output(bool)]
 /// # struct Jump;
-#[derive(Component, Reflect, Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub struct ActionMock {
     pub state: ActionState,
     pub value: ActionValue,
@@ -396,7 +373,9 @@ impl ActionMock {
 }
 
 /// Specifies how long [`ActionMock`] should remain active.
-#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Reflect, Debug, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum MockSpan {
     /// Active for a fixed number of context evaluations.
     Updates(u32),

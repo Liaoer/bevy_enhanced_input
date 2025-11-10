@@ -10,7 +10,7 @@ use crate::prelude::*;
 ///
 /// # Examples
 ///
-/// To get action entities during spawning, you could use [`SpawnWith`](bevy::ecs::spawn::SpawnWith).
+/// To get action entities during spawning, you could use [`SpawnWith`].
 ///
 /// ```
 /// use bevy::{ecs::spawn::SpawnWith, prelude::*};
@@ -26,7 +26,7 @@ use crate::prelude::*;
 ///
 ///     // Sums movement when `Accelerate` is pressed.
 ///     context.spawn((
-///         Action::<Move>::new(),
+///         Action::<Movement>::new(),
 ///         AccumulateBy::new(accelerate),
 ///         Bindings::spawn(Cardinal::wasd_keys().with(DeadZone::default())),
 ///     ));
@@ -41,7 +41,7 @@ use crate::prelude::*;
 ///
 /// #[derive(InputAction)]
 /// #[action_output(f32)]
-/// struct Move;
+/// struct Movement;
 /// ```
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 pub struct AccumulateBy {
@@ -96,7 +96,7 @@ mod tests {
         let (mut world, mut state) = context::init_world();
         let action = world
             .spawn((
-                Action::<TestAction>::new(),
+                Action::<Test>::new(),
                 ActionState::Fired,
                 ActionValue::from(true),
             ))
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn accumulation_inactive() {
         let (mut world, mut state) = context::init_world();
-        let action = world.spawn(Action::<TestAction>::new()).id();
+        let action = world.spawn(Action::<Test>::new()).id();
         let (time, actions) = state.get(&world);
 
         let mut modifier = AccumulateBy::new(action);
@@ -131,5 +131,5 @@ mod tests {
 
     #[derive(InputAction)]
     #[action_output(bool)]
-    struct TestAction;
+    struct Test;
 }

@@ -21,10 +21,10 @@ pub(crate) fn update_pending(mut reader: InputReader) {
 /// Actions can read binding values and optionally consume them without affecting Bevy input resources.
 #[derive(SystemParam)]
 pub(crate) struct InputReader<'w, 's> {
-    keys: Res<'w, ButtonInput<KeyCode>>,
-    mouse_buttons: Res<'w, ButtonInput<MouseButton>>,
-    mouse_motion: Res<'w, AccumulatedMouseMotion>,
-    mouse_scroll: Res<'w, AccumulatedMouseScroll>,
+    keys: Option<Res<'w, ButtonInput<KeyCode>>>,
+    mouse_buttons: Option<Res<'w, ButtonInput<MouseButton>>>,
+    mouse_motion: Option<Res<'w, AccumulatedMouseMotion>>,
+    mouse_scroll: Option<Res<'w, AccumulatedMouseScroll>>,
     gamepads: Query<'w, 's, &'static Gamepad>,
     action_sources: Res<'w, ActionSources>,
     consumed: ResMut<'w, ConsumedInputs>,
@@ -75,7 +75,7 @@ impl InputReader<'_, '_> {
         match binding {
             Binding::Keyboard { key, mod_keys } => {
                 let pressed = self.action_sources.keyboard
-                    && self.keys.pressed(key)
+                    && self.keys.as_ref().is_some_and(|k| k.pressed(key))
                     && self.mod_keys_pressed(mod_keys)
                     && !self.ignored(binding);
 
@@ -83,7 +83,10 @@ impl InputReader<'_, '_> {
             }
             Binding::MouseButton { button, mod_keys } => {
                 let pressed = self.action_sources.mouse_buttons
-                    && self.mouse_buttons.pressed(button)
+                    && self
+                        .mouse_buttons
+                        .as_ref()
+                        .is_some_and(|b| b.pressed(button))
                     && self.mod_keys_pressed(mod_keys)
                     && !self.ignored(binding);
 
@@ -97,7 +100,11 @@ impl InputReader<'_, '_> {
                     return Vec2::ZERO.into();
                 }
 
-                self.mouse_motion.delta.into()
+                self.mouse_motion
+                    .as_ref()
+                    .map(|m| m.delta)
+                    .unwrap_or_default()
+                    .into()
             }
             Binding::MouseWheel { mod_keys } => {
                 if !self.action_sources.mouse_wheel
@@ -107,7 +114,11 @@ impl InputReader<'_, '_> {
                     return Vec2::ZERO.into();
                 }
 
-                self.mouse_scroll.delta.into()
+                self.mouse_scroll
+                    .as_ref()
+                    .map(|s| s.delta)
+                    .unwrap_or_default()
+                    .into()
             }
             Binding::GamepadButton(button) => {
                 if !self.action_sources.gamepad_button || self.ignored(binding) {
@@ -152,6 +163,53 @@ impl InputReader<'_, '_> {
                 let value = value.unwrap_or_default();
                 value.into()
             }
+            Binding::AnyKey => {
+                if self.ignored(Binding::AnyKey) {
+                    return false.into();
+                }
+
+                if self.action_sources.keyboard
+                    && self
+                        .keys
+                        .iter()
+                        .flat_map(|k| k.get_pressed())
+                        .any(|&k| !self.ignored(k))
+                {
+                    return true.into();
+                }
+
+                if self.action_sources.mouse_buttons
+                    && self
+                        .mouse_buttons
+                        .iter()
+                        .flat_map(|b| b.get_pressed())
+                        .any(|&b| !self.ignored(b))
+                {
+                    return true.into();
+                }
+
+                if self.action_sources.gamepad_button {
+                    match *self.gamepad_device {
+                        GamepadDevice::Single(entity) => {
+                            if let Ok(gamepad) = self.gamepads.get(entity)
+                                && gamepad.get_pressed().any(|&b| !self.ignored(b))
+                            {
+                                return true.into();
+                            }
+                        }
+                        GamepadDevice::Any => {
+                            for gamepad in &self.gamepads {
+                                if gamepad.get_pressed().any(|&b| !self.ignored(b)) {
+                                    return true.into();
+                                }
+                            }
+                        }
+                        GamepadDevice::None => (),
+                    };
+                }
+
+                false.into()
+            }
             Binding::None => false.into(),
         }
     }
@@ -162,7 +220,7 @@ impl InputReader<'_, '_> {
         }
 
         for keys in mod_keys.iter_keys() {
-            if !self.keys.any_pressed(keys) {
+            if self.keys.as_ref().is_none_or(|k| !k.any_pressed(keys)) {
                 return false;
             }
         }
@@ -170,18 +228,23 @@ impl InputReader<'_, '_> {
         true
     }
 
-    fn ignored(&self, binding: Binding) -> bool {
+    fn ignored(&self, binding: impl Into<Binding>) -> bool {
         if *self.skip_ignore_check {
             return false;
         }
 
+        let keys_ignored =
+            self.pending.ignored.any_key || self.consumed.values().any(|ignored| ignored.any_key);
         let mut iter = iter::once(&self.pending.ignored).chain(self.consumed.values());
-        match binding {
-            Binding::Keyboard { key, mod_keys } => iter
-                .any(|inputs| inputs.keys.contains(&key) || inputs.mod_keys.intersects(mod_keys)),
-            Binding::MouseButton { button, mod_keys } => iter.any(|inputs| {
-                inputs.mouse_buttons.contains(&button) || inputs.mod_keys.intersects(mod_keys)
-            }),
+        match binding.into() {
+            Binding::Keyboard { key, mod_keys } => {
+                iter.any(|i| i.keys.contains(&key) || i.mod_keys.intersects(mod_keys))
+                    || keys_ignored
+            }
+            Binding::MouseButton { button, mod_keys } => {
+                iter.any(|i| i.mouse_buttons.contains(&button) || i.mod_keys.intersects(mod_keys))
+                    || keys_ignored
+            }
             Binding::MouseMotion { mod_keys } => {
                 iter.any(|inputs| inputs.mouse_motion || inputs.mod_keys.intersects(mod_keys))
             }
@@ -193,7 +256,7 @@ impl InputReader<'_, '_> {
                     gamepad: *self.gamepad_device,
                     input: button,
                 };
-                iter.any(|inputs| inputs.gamepad_buttons.contains(&input))
+                iter.any(|inputs| inputs.gamepad_buttons.contains(&input)) || keys_ignored
             }
             Binding::GamepadAxis(axis) => {
                 let input = GamepadInput {
@@ -202,6 +265,7 @@ impl InputReader<'_, '_> {
                 };
                 iter.any(|inputs| inputs.gamepad_axes.contains(&input))
             }
+            Binding::AnyKey => keys_ignored,
             Binding::None => false,
         }
     }
@@ -235,7 +299,7 @@ impl InputReader<'_, '_> {
 /// use bevy_enhanced_input::prelude::*;
 ///
 /// # let mut app = App::new();
-/// app.add_systems(PreUpdate, disable_mouse.before(EnhancedInputSet::Update));
+/// app.add_systems(PreUpdate, disable_mouse.before(EnhancedInputSystems::Update));
 ///
 /// fn disable_mouse(
 ///     mut action_sources: ResMut<ActionSources>,
@@ -308,6 +372,7 @@ pub(crate) struct IgnoredInputs {
     mouse_wheel: bool,
     gamepad_buttons: HashSet<GamepadInput<GamepadButton>>,
     gamepad_axes: HashSet<GamepadInput<GamepadAxis>>,
+    any_key: bool,
 }
 
 impl IgnoredInputs {
@@ -345,6 +410,7 @@ impl IgnoredInputs {
 
                 self.gamepad_axes.insert(input);
             }
+            Binding::AnyKey => self.any_key = true,
             Binding::None => (),
         }
     }
@@ -357,6 +423,7 @@ impl IgnoredInputs {
         self.mouse_wheel = false;
         self.gamepad_buttons.clear();
         self.gamepad_axes.clear();
+        self.any_key = false;
     }
 }
 
@@ -385,11 +452,13 @@ mod tests {
 
         let mut reader = state.get_mut(&mut world);
         assert_eq!(reader.value(key), true.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(reader.value(KeyCode::Escape), false.into());
         assert_eq!(reader.value(key.with_mod_keys(ModKeys::ALT)), false.into());
 
         reader.consume::<PreUpdate>(key);
         assert_eq!(reader.value(key), false.into());
+        assert_eq!(reader.value(Binding::AnyKey), false.into());
     }
 
     #[test]
@@ -403,6 +472,7 @@ mod tests {
 
         let mut reader = state.get_mut(&mut world);
         assert_eq!(reader.value(button), true.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(reader.value(MouseButton::Right), false.into());
         assert_eq!(
             reader.value(button.with_mod_keys(ModKeys::CONTROL)),
@@ -411,6 +481,7 @@ mod tests {
 
         reader.consume::<PreUpdate>(button);
         assert_eq!(reader.value(button), false.into());
+        assert_eq!(reader.value(Binding::AnyKey), false.into());
     }
 
     #[test]
@@ -464,11 +535,13 @@ mod tests {
         let button1 = GamepadButton::South;
         let mut gamepad1 = Gamepad::default();
         gamepad1.analog_mut().set(button1, value);
+        gamepad1.digital_mut().press(button1);
         let gamepad_entity = world.spawn(gamepad1).id();
 
         let button2 = GamepadButton::East;
         let mut gamepad2 = Gamepad::default();
         gamepad2.analog_mut().set(button2, value);
+        gamepad2.digital_mut().press(button2);
         world.spawn(gamepad2);
 
         let mut reader = state.get_mut(&mut world);
@@ -479,10 +552,12 @@ mod tests {
             0.0.into(),
             "should read only from `{gamepad_entity:?}`"
         );
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(reader.value(GamepadButton::North), 0.0.into());
 
         reader.consume::<PreUpdate>(button1);
         assert_eq!(reader.value(button1), 0.0.into());
+        assert_eq!(reader.value(Binding::AnyKey), false.into());
     }
 
     #[test]
@@ -493,23 +568,28 @@ mod tests {
         let button1 = GamepadButton::South;
         let mut gamepad1 = Gamepad::default();
         gamepad1.analog_mut().set(button1, value);
+        gamepad1.digital_mut().press(button1);
         world.spawn(gamepad1);
 
         let button2 = GamepadButton::East;
         let mut gamepad2 = Gamepad::default();
         gamepad2.analog_mut().set(button2, value);
+        gamepad2.digital_mut().press(button2);
         world.spawn(gamepad2);
 
         let mut reader = state.get_mut(&mut world);
         assert_eq!(reader.value(button1), value.into());
         assert_eq!(reader.value(button2), value.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(reader.value(GamepadButton::North), 0.0.into());
 
         reader.consume::<PreUpdate>(button1);
         assert_eq!(reader.value(button1), 0.0.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
 
         reader.consume::<PreUpdate>(button2);
         assert_eq!(reader.value(button2), 0.0.into());
+        assert_eq!(reader.value(Binding::AnyKey), false.into());
     }
 
     #[test]
@@ -578,12 +658,14 @@ mod tests {
         let mut gamepad = Gamepad::default();
         gamepad.analog_mut().set(axis, value);
         gamepad.analog_mut().set(button, value);
+        gamepad.digital_mut().press(button);
         world.spawn(gamepad);
 
         let mut reader = state.get_mut(&mut world);
         reader.set_gamepad(None);
         assert_eq!(reader.value(button), 0.0.into());
         assert_eq!(reader.value(axis), 0.0.into());
+        assert_eq!(reader.value(Binding::AnyKey), false.into());
     }
 
     #[test]
@@ -621,6 +703,7 @@ mod tests {
         let mut reader = state.get_mut(&mut world);
         assert_eq!(reader.value(binding), true.into());
         assert_eq!(reader.value(key), true.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(
             reader.value(binding.with_mod_keys(ModKeys::ALT)),
             false.into()
@@ -632,6 +715,11 @@ mod tests {
 
         reader.consume::<PreUpdate>(binding);
         assert_eq!(reader.value(binding), false.into());
+        assert_eq!(
+            reader.value(Binding::AnyKey),
+            true.into(),
+            "should still be pressed due to modifier"
+        );
 
         // Try another key, but with the same modifier that was consumed.
         let other_key = KeyCode::Enter;
@@ -659,6 +747,7 @@ mod tests {
         let mut reader = state.get_mut(&mut world);
         assert_eq!(reader.value(binding), true.into());
         assert_eq!(reader.value(button), true.into());
+        assert_eq!(reader.value(Binding::AnyKey), true.into());
         assert_eq!(
             reader.value(binding.with_mod_keys(ModKeys::CONTROL)),
             false.into()
@@ -670,6 +759,11 @@ mod tests {
 
         reader.consume::<PreUpdate>(binding);
         assert_eq!(reader.value(binding), false.into());
+        assert_eq!(
+            reader.value(Binding::AnyKey),
+            true.into(),
+            "should still be pressed due to modifier"
+        );
     }
 
     #[test]
@@ -777,8 +871,8 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<ButtonInput<KeyCode>>();
         world.init_resource::<ButtonInput<MouseButton>>();
-        world.init_resource::<Events<MouseMotion>>();
-        world.init_resource::<Events<MouseWheel>>();
+        world.init_resource::<Messages<MouseMotion>>();
+        world.init_resource::<Messages<MouseWheel>>();
         world.init_resource::<ButtonInput<GamepadButton>>();
         world.init_resource::<Axis<GamepadAxis>>();
         world.init_resource::<AccumulatedMouseMotion>();

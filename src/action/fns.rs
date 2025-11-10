@@ -1,9 +1,7 @@
-use core::{any, fmt::Debug};
-
 use bevy::prelude::*;
-use log::debug;
+use log::{debug, warn};
 
-use crate::prelude::*;
+use crate::prelude::{Cancel, *};
 
 /// Functions for type `A` associated with [`Action<A>`] component.
 ///
@@ -12,7 +10,7 @@ use crate::prelude::*;
 #[component(immutable)]
 pub(crate) struct ActionFns {
     store_value: fn(&mut EntityMut, ActionValue),
-    trigger: fn(&mut Commands, Entity, ActionState, ActionEvents, ActionValue, ActionTime),
+    trigger: fn(&mut Commands, Entity, Entity, ActionState, ActionEvents, ActionValue, ActionTime),
 }
 
 impl ActionFns {
@@ -25,109 +23,114 @@ impl ActionFns {
     }
 
     /// Stores the given value in the entity's [`Action<A>`] component for which this instance was created.
-    pub(crate) fn store_value(&self, entity: &mut EntityMut, value: ActionValue) {
-        (self.store_value)(entity, value);
+    pub(crate) fn store_value(&self, action: &mut EntityMut, value: ActionValue) {
+        (self.store_value)(action, value);
     }
 
     /// Triggers events based on [`ActionEvents`] for the action marker `A` for which this instance was created.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn trigger(
         &self,
         commands: &mut Commands,
-        entity: Entity,
+        context: Entity,
+        action: Entity,
         state: ActionState,
         events: ActionEvents,
         value: ActionValue,
         time: ActionTime,
     ) {
-        (self.trigger)(commands, entity, state, events, value, time);
+        (self.trigger)(commands, context, action, state, events, value, time);
     }
 }
 
-fn store_value<A: InputAction>(entity: &mut EntityMut, value: ActionValue) {
-    let mut action = entity
+fn store_value<A: InputAction>(action: &mut EntityMut, value: ActionValue) {
+    let dim = value.dim();
+    if dim != A::Output::DIM {
+        warn!(
+            "action `{}` (`{}`) expects `{:?}`, but got `{dim:?}`",
+            ShortName::of::<A>(),
+            action.id(),
+            A::Output::DIM
+        );
+    }
+
+    let mut action = action
         .get_mut::<Action<A>>()
         .expect("entity should be an action");
 
-    **action = A::Output::unwrap_value(value);
+    **action = value.into();
 }
 
 fn trigger<A: InputAction>(
     commands: &mut Commands,
-    entity: Entity,
+    context: Entity,
+    action: Entity,
     state: ActionState,
     events: ActionEvents,
     value: ActionValue,
     time: ActionTime,
 ) {
-    for (_, event) in events.iter_names() {
+    for (name, event) in events.iter_names() {
+        debug!(
+            "triggering `{name}` for `{}` (`{action}`) for context `{context}`",
+            ShortName::of::<A>()
+        );
+
         match event {
             ActionEvents::STARTED => {
-                trigger_and_log::<A, _>(
-                    commands,
-                    entity,
-                    Started::<A> {
-                        value: A::Output::unwrap_value(value),
-                        state,
-                    },
-                );
+                let event = Start::<A> {
+                    context,
+                    action,
+                    value: value.into(),
+                    state,
+                };
+                commands.trigger(event);
             }
             ActionEvents::ONGOING => {
-                trigger_and_log::<A, _>(
-                    commands,
-                    entity,
-                    Ongoing::<A> {
-                        value: A::Output::unwrap_value(value),
-                        state,
-                        elapsed_secs: time.elapsed_secs,
-                    },
-                );
+                let event = Ongoing::<A> {
+                    context,
+                    action,
+                    value: value.into(),
+                    state,
+                    elapsed_secs: time.elapsed_secs,
+                };
+                commands.trigger(event);
             }
             ActionEvents::FIRED => {
-                trigger_and_log::<A, _>(
-                    commands,
-                    entity,
-                    Fired::<A> {
-                        value: A::Output::unwrap_value(value),
-                        state,
-                        fired_secs: time.fired_secs,
-                        elapsed_secs: time.elapsed_secs,
-                    },
-                );
+                let event = Fire::<A> {
+                    context,
+                    action,
+                    value: value.into(),
+                    state,
+                    fired_secs: time.fired_secs,
+                    elapsed_secs: time.elapsed_secs,
+                };
+                commands.trigger(event);
             }
             ActionEvents::CANCELED => {
-                trigger_and_log::<A, _>(
-                    commands,
-                    entity,
-                    Canceled::<A> {
-                        value: A::Output::unwrap_value(value),
-                        state,
-                        elapsed_secs: time.elapsed_secs,
-                    },
-                );
+                let event = Cancel::<A> {
+                    context,
+                    action,
+                    value: value.into(),
+                    state,
+                    elapsed_secs: time.elapsed_secs,
+                };
+                commands.trigger(event);
             }
             ActionEvents::COMPLETED => {
-                trigger_and_log::<A, _>(
-                    commands,
-                    entity,
-                    Completed::<A> {
-                        value: A::Output::unwrap_value(value),
-                        state,
-                        fired_secs: time.fired_secs,
-                        elapsed_secs: time.elapsed_secs,
-                    },
-                );
+                let event = Complete::<A> {
+                    context,
+                    action,
+                    value: value.into(),
+                    state,
+                    fired_secs: time.fired_secs,
+                    elapsed_secs: time.elapsed_secs,
+                };
+                commands.trigger(event);
             }
             _ => unreachable!("iteration should yield only named flags"),
         }
     }
-}
-
-fn trigger_and_log<A, E: Event + Debug>(commands: &mut Commands, entity: Entity, event: E) {
-    debug!(
-        "triggering `{event:?}` for `{}` for `{entity}`",
-        any::type_name::<A>()
-    );
-    commands.trigger_targets(event, entity);
 }
 
 #[cfg(test)]
@@ -195,36 +198,31 @@ mod tests {
         let mut world = World::new();
 
         world.init_resource::<TriggeredEvents>();
+        world.add_observer(|_: On<Fire<Test>>, mut events: ResMut<TriggeredEvents>| {
+            events.insert(ActionEvents::FIRED);
+        });
+        world.add_observer(|_: On<Start<Test>>, mut events: ResMut<TriggeredEvents>| {
+            events.insert(ActionEvents::STARTED);
+        });
         world.add_observer(
-            |_trigger: Trigger<Fired<Test>>, mut events: ResMut<TriggeredEvents>| {
-                events.insert(ActionEvents::FIRED);
-            },
-        );
-        world.add_observer(
-            |_trigger: Trigger<Started<Test>>, mut events: ResMut<TriggeredEvents>| {
-                events.insert(ActionEvents::STARTED);
-            },
-        );
-        world.add_observer(
-            |_trigger: Trigger<Ongoing<Test>>, mut events: ResMut<TriggeredEvents>| {
+            |_: On<Ongoing<Test>>, mut events: ResMut<TriggeredEvents>| {
                 events.insert(ActionEvents::ONGOING);
             },
         );
         world.add_observer(
-            |_trigger: Trigger<Completed<Test>>, mut events: ResMut<TriggeredEvents>| {
+            |_: On<Complete<Test>>, mut events: ResMut<TriggeredEvents>| {
                 events.insert(ActionEvents::COMPLETED);
             },
         );
-        world.add_observer(
-            |_trigger: Trigger<Canceled<Test>>, mut events: ResMut<TriggeredEvents>| {
-                events.insert(ActionEvents::CANCELED);
-            },
-        );
+        world.add_observer(|_: On<Cancel<Test>>, mut events: ResMut<TriggeredEvents>| {
+            events.insert(ActionEvents::CANCELED);
+        });
 
         let events = ActionEvents::new(initial_state, target_state);
         let fns = ActionFns::new::<Test>();
         fns.trigger(
             &mut world.commands(),
+            Entity::PLACEHOLDER,
             Entity::PLACEHOLDER,
             target_state,
             events,

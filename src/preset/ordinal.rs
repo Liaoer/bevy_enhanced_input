@@ -1,4 +1,8 @@
-use bevy::{ecs::spawn::SpawnableList, prelude::*};
+use bevy::{
+    ecs::spawn::SpawnableList,
+    prelude::*,
+    ptr::{MovingPtr, move_as_ptr},
+};
 
 use crate::prelude::*;
 
@@ -35,7 +39,7 @@ impl<N, NE, E, SE, S, SW, W, NW, T: Clone> WithBundle<T> for Ordinal<N, NE, E, S
 impl Ordinal<Binding, Binding, Binding, Binding, Binding, Binding, Binding, Binding> {
     /// Maps numpad keys as 2-dimensional input.
     #[must_use]
-    pub fn numpad_keys() -> Self {
+    pub fn numpad() -> Self {
         Self {
             north: KeyCode::Numpad8.into(),
             north_east: KeyCode::Numpad9.into(),
@@ -71,6 +75,21 @@ impl Ordinal<Binding, Binding, Binding, Binding, Binding, Binding, Binding, Bind
             north_west: KeyCode::KeyY.into(),
         }
     }
+
+    /// Applies keyboard modifiers to all bindings.
+    #[must_use]
+    pub fn with_mod_keys(self, mod_keys: ModKeys) -> Self {
+        Self {
+            north: self.north.with_mod_keys(mod_keys),
+            north_east: self.north_east.with_mod_keys(mod_keys),
+            east: self.east.with_mod_keys(mod_keys),
+            south_east: self.south_east.with_mod_keys(mod_keys),
+            south: self.south.with_mod_keys(mod_keys),
+            south_west: self.south_west.with_mod_keys(mod_keys),
+            west: self.west.with_mod_keys(mod_keys),
+            north_west: self.north_west.with_mod_keys(mod_keys),
+        }
+    }
 }
 
 impl<N, NE, E, SE, S, SW, W, NW> SpawnableList<BindingOf> for Ordinal<N, NE, E, SE, S, SW, W, NW>
@@ -84,31 +103,34 @@ where
     W: Bundle,
     NW: Bundle,
 {
-    fn spawn(self, world: &mut World, entity: Entity) {
+    fn spawn(this: MovingPtr<'_, Self>, world: &mut World, entity: Entity) {
+        let ordinal = this.read();
         let cardinal = Cardinal {
-            north: self.north,
-            east: self.east,
-            south: self.south,
-            west: self.west,
+            north: ordinal.north,
+            east: ordinal.east,
+            south: ordinal.south,
+            west: ordinal.west,
         };
-        cardinal.spawn(world, entity);
 
-        world.spawn((BindingOf(entity), self.north_east, SwizzleAxis::XXZ));
+        move_as_ptr!(cardinal);
+        SpawnableList::spawn(cardinal, world, entity);
+
+        world.spawn((BindingOf(entity), ordinal.north_east, SwizzleAxis::XXZ));
         world.spawn((
             BindingOf(entity),
-            self.south_east,
+            ordinal.south_east,
             SwizzleAxis::XXZ,
             Negate::y(),
         ));
         world.spawn((
             BindingOf(entity),
-            self.south_west,
+            ordinal.south_west,
             SwizzleAxis::XXZ,
             Negate::all(),
         ));
         world.spawn((
             BindingOf(entity),
-            self.north_west,
+            ordinal.north_west,
             SwizzleAxis::XXZ,
             Negate::x(),
         ));

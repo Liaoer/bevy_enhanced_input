@@ -1,10 +1,67 @@
+/*!
+Contexts are a way to group actions and manage their evaluation order.
+They allow you to define when actions are active and which inputs they respond to.
+
+Actions are checked only if their context is active,
+and are evaluated in the order of their context's [`ContextPriority`],
+then mainly by the order in which the actions were added to the context,
+with the first action having the highest priority.
+
+Further details on how to order actions due to their inputs being consumed
+can be found in the documentation for [`ActionSettings::consume_input`].
+
+# Removing contexts
+
+If you despawn an entity with its context, the actions and bindings will also be despawned.
+However, if you only want to remove a context from an entity, you must remove the required components
+**and** manually despawn its actions.
+
+```
+use bevy::prelude::*;
+use bevy_enhanced_input::prelude::*;
+
+#[derive(Component)]
+struct OnFoot;
+
+#[derive(InputAction)]
+#[action_output(bool)]
+struct Jump;
+
+#[derive(InputAction)]
+#[action_output(bool)]
+struct Fire;
+
+let mut world = World::new();
+let mut player = world.spawn((
+    OnFoot,
+    actions!(OnFoot[
+        (Action::<Jump>::new(), bindings![KeyCode::Space, GamepadButton::South]),
+        (Action::<Fire>::new(), bindings![MouseButton::Left, GamepadButton::RightTrigger2]),
+    ])
+));
+
+player
+    .remove_with_requires::<OnFoot>()
+    .despawn_related::<Actions<OnFoot>>();
+
+assert_eq!(world.entities().len(), 1, "only the player entity should be left");
+```
+
+Actions aren't despawned automatically via [`EntityWorldMut::remove_with_requires`], since Bevy doesn't automatically
+despawn related entities when their relationship targets (like [`Actions<C>`]) are removed. For this reason, [`Actions<C>`]
+is not a required component for `C`. See [#20252](https://github.com/bevyengine/bevy/issues/20252) for more details.
+
+When an action is despawned, it automatically transitions its state to [`ActionState::None`] with [`ActionValue::zero`],
+triggering the corresponding events. Depending on your use case, using [`ContextActivity`] might be more convenient than removal.
+*/
+
 pub mod input_reader;
 mod instance;
 pub mod time;
 mod trigger_tracker;
 
 use core::{
-    any::{self, TypeId},
+    any::TypeId,
     cmp::{Ordering, Reverse},
     marker::PhantomData,
 };
@@ -21,14 +78,15 @@ use bevy::{
     },
     prelude::*,
 };
-use log::{debug, trace, warn};
+use log::{debug, trace};
+#[cfg(feature = "serialize")]
 use serde::{Deserialize, Serialize};
 
 use crate::{
     action::fns::ActionFns,
     binding::FirstActivation,
     condition::fns::{ConditionFns, ConditionRegistry},
-    context::trigger_tracker::TriggerTracker,
+    context::{input_reader::PendingBindings, trigger_tracker::TriggerTracker},
     modifier::fns::{ModifierFns, ModifierRegistry},
     prelude::*,
 };
@@ -66,8 +124,8 @@ pub trait InputContextAppExt {
     /// in which the context's actions will be evaluated.
     ///
     /// For example, if your game logic runs inside [`FixedMain`](bevy::app::FixedMain), you can set the schedule
-    /// to [`FixedPreUpdate`]. This way, if the schedule runs multiple times per frame, events like [`Started`] or
-    /// [`Completed`] will be triggered only once per schedule run.
+    /// to [`FixedPreUpdate`]. This way, if the schedule runs multiple times per frame, events like [`Start`] or
+    /// [`Complete`] will be triggered only once per schedule run.
     fn add_input_context_to<S: ScheduleLabel + Default, C: Component>(&mut self) -> &mut Self;
 }
 
@@ -75,31 +133,38 @@ impl InputContextAppExt for App {
     fn add_input_context_to<S: ScheduleLabel + Default, C: Component>(&mut self) -> &mut Self {
         debug!(
             "registering `{}` for `{}`",
-            any::type_name::<C>(),
-            any::type_name::<S>(),
+            ShortName::of::<C>(),
+            ShortName::of::<S>(),
         );
 
-        let id = self.world_mut().register_component::<Actions<C>>();
+        let actions_id = self.world_mut().register_component::<Actions<C>>();
+        let activity_id = self.world_mut().register_component::<ContextActivity<C>>();
         let mut registry = self.world_mut().resource_mut::<ContextRegistry>();
         if let Some(contexts) = registry
             .iter_mut()
             .find(|c| c.schedule_id == TypeId::of::<S>())
         {
             debug_assert!(
-                !contexts.actions_ids.contains(&id),
+                !contexts.actions_ids.contains(&actions_id),
                 "context `{}` shouldn't be added more then once",
-                any::type_name::<C>()
+                ShortName::of::<C>()
             );
-            contexts.actions_ids.push(id);
+            contexts.actions_ids.push(actions_id);
+            contexts.activity_ids.push(activity_id);
         } else {
             let mut contexts = ScheduleContexts::new::<S>();
-            contexts.actions_ids.push(id);
+            contexts.actions_ids.push(actions_id);
+            contexts.activity_ids.push(activity_id);
             registry.push(contexts);
         }
 
-        self.register_required_components::<C, ContextPriority<C>>()
-            .add_observer(register_instance::<C, S>)
-            .add_observer(remove_context::<C, S>);
+        let _ = self.try_register_required_components::<C, ContextPriority<C>>();
+        let _ = self.try_register_required_components::<C, ContextActivity<C>>();
+
+        self.add_observer(register::<C, S>)
+            .add_observer(unregister::<C, S>)
+            .add_observer(deactivate::<C>)
+            .add_observer(reset_action::<C>);
 
         self
     }
@@ -124,6 +189,9 @@ pub(crate) struct ScheduleContexts {
     /// IDs of [`Actions<C>`].
     actions_ids: Vec<ComponentId>,
 
+    /// IDs of [`ContextActivity<C>`].
+    activity_ids: Vec<ComponentId>,
+
     /// Configures the app for this schedule.
     setup: fn(&Self, &mut App, &ConditionRegistry, &ModifierRegistry),
 }
@@ -137,6 +205,7 @@ impl ScheduleContexts {
         Self {
             schedule_id: TypeId::of::<S>(),
             actions_ids: Default::default(),
+            activity_ids: Default::default(),
             // Since the type is not present in the function signature, we can store
             // functions for specific type without making the struct generic.
             setup: Self::setup_typed::<S>,
@@ -160,9 +229,9 @@ impl ScheduleContexts {
         conditions: &ConditionRegistry,
         modifiers: &ModifierRegistry,
     ) {
-        debug!("setting up systems for `{}`", any::type_name::<S>());
+        debug!("setting up systems for `{}`", ShortName::of::<S>());
 
-        let update = (
+        let update_fn = (
             ParamBuilder,
             ParamBuilder,
             ParamBuilder,
@@ -171,6 +240,9 @@ impl ScheduleContexts {
                 builder
                     .data::<Option<&GamepadDevice>>()
                     .optional(|builder| {
+                        for &id in &self.activity_ids {
+                            builder.mut_id(id);
+                        }
                         for &id in &self.actions_ids {
                             builder.mut_id(id);
                         }
@@ -193,11 +265,14 @@ impl ScheduleContexts {
             .build_state(app.world_mut())
             .build_system(update::<S>);
 
-        let trigger = (
+        let trigger_fn = (
             ParamBuilder,
             ParamBuilder,
             QueryParamBuilder::new(|builder| {
                 builder.optional(|builder| {
+                    for &id in &self.activity_ids {
+                        builder.mut_id(id);
+                    }
                     for &id in &self.actions_ids {
                         builder.ref_id(id);
                     }
@@ -211,46 +286,121 @@ impl ScheduleContexts {
         app.init_resource::<ContextInstances<S>>()
             .configure_sets(
                 S::default(),
-                (EnhancedInputSet::Update, EnhancedInputSet::Apply).chain(),
+                (EnhancedInputSystems::Update, EnhancedInputSystems::Apply).chain(),
             )
             .add_systems(
                 S::default(),
                 (
-                    update.in_set(EnhancedInputSet::Update),
-                    trigger.in_set(EnhancedInputSet::Apply),
+                    update_fn.in_set(EnhancedInputSystems::Update),
+                    trigger_fn.in_set(EnhancedInputSystems::Apply),
                 ),
             );
     }
 }
 
-fn register_instance<C: Component, S: ScheduleLabel>(
-    trigger: Trigger<OnInsert, ContextPriority<C>>,
+fn register<C: Component, S: ScheduleLabel>(
+    add: On<Insert, ContextPriority<C>>,
     mut instances: ResMut<ContextInstances<S>>,
-    // TODO Bevy 0.17: Use `Allows` filter instead of `Has`.
-    contexts: Query<(&ContextPriority<C>, Has<Disabled>)>,
+    contexts: Query<&ContextPriority<C>, Allow<Disabled>>,
 ) {
-    debug!(
-        "registering `{}` to `{}`",
-        any::type_name::<C>(),
-        trigger.target(),
-    );
+    debug!("registering `{}` to `{}`", ShortName::of::<C>(), add.entity);
 
-    let (&priority, _) = contexts.get(trigger.target()).unwrap();
-    instances.add::<C>(trigger.target(), *priority);
+    let priority = **contexts.get(add.entity).unwrap();
+    instances.add::<C>(add.entity, priority);
 }
 
-fn remove_context<C: Component, S: ScheduleLabel>(
-    trigger: Trigger<OnReplace, ContextPriority<C>>,
+fn unregister<C: Component, S: ScheduleLabel>(
+    add: On<Replace, ContextPriority<C>>,
     mut instances: ResMut<ContextInstances<S>>,
 ) {
     debug!(
         "unregistering `{}` from `{}`",
-        any::type_name::<C>(),
-        trigger.target(),
+        ShortName::of::<C>(),
+        add.entity,
     );
 
-    instances.remove::<C>(trigger.target());
+    instances.remove::<C>(add.entity);
 }
+
+fn deactivate<C: Component>(
+    add: On<Insert, ContextActivity<C>>,
+    mut pending: ResMut<PendingBindings>,
+    contexts: Query<(&ContextActivity<C>, &Actions<C>)>,
+    actions: Query<(&ActionSettings, &Bindings)>,
+    bindings: Query<&Binding>,
+) {
+    let Ok((&active, context_actions)) = contexts.get(add.entity) else {
+        return;
+    };
+
+    debug!(
+        "setting activity of `{}` to `{}`",
+        ShortName::of::<C>(),
+        *active,
+    );
+
+    if !*active {
+        for (settings, action_bindings) in actions.iter_many(context_actions) {
+            if settings.require_reset {
+                pending.extend(bindings.iter_many(action_bindings).copied());
+            }
+        }
+    }
+}
+
+/// Resets action data and triggers corresponding events on removal.
+pub(crate) fn reset_action<C: Component>(
+    add: On<Remove, ActionOf<C>>,
+    mut commands: Commands,
+    mut pending: ResMut<PendingBindings>,
+    mut actions: Query<(
+        &ActionOf<C>,
+        &ActionSettings,
+        &ActionFns,
+        Option<&Bindings>,
+        &mut ActionValue,
+        &mut ActionState,
+        &mut ActionEvents,
+        &mut ActionTime,
+    )>,
+    bindings: Query<&Binding>,
+) {
+    let Ok((action_of, settings, fns, action_bindings, mut value, mut state, mut events, mut time)) =
+        actions.get_mut(add.entity)
+    else {
+        trace!("ignoring reset for `{}`", add.entity);
+        return;
+    };
+
+    *time = Default::default();
+    events.set_if_neq(ActionEvents::new(*state, ActionState::None));
+    state.set_if_neq(Default::default());
+    value.set_if_neq(ActionValue::zero(value.dim()));
+
+    fns.trigger(
+        &mut commands,
+        **action_of,
+        add.entity,
+        *state,
+        *events,
+        *value,
+        *time,
+    );
+
+    if let Some(action_bindings) = action_bindings
+        && settings.require_reset
+    {
+        pending.extend(bindings.iter_many(action_bindings).copied());
+    }
+}
+
+/// Marks an [`Action<C>`] as manually mocked, skipping the [`EnhancedInputSystems::Update`] logic for it.
+///
+/// This allows modifying any action data without its values being overridden during evaluation.
+///
+/// Takes precedence over [`ActionMock`], which drives specific [`ActionValue`] and [`ActionState`] during evaluation.
+#[derive(Component)]
+pub struct ExternallyMocked;
 
 #[allow(clippy::too_many_arguments)]
 fn update<S: ScheduleLabel>(
@@ -259,15 +409,18 @@ fn update<S: ScheduleLabel>(
     mut reader: InputReader,
     instances: Res<ContextInstances<S>>,
     mut contexts: Query<FilteredEntityMut>,
-    mut actions: Query<(
-        Entity,
-        &Name,
-        &ActionSettings,
-        Option<&Bindings>,
-        Option<&ModifierFns>,
-        Option<&ConditionFns>,
-        Option<&mut ActionMock>,
-    )>,
+    mut actions: Query<
+        (
+            Entity,
+            &Name,
+            &ActionSettings,
+            Option<&Bindings>,
+            Option<&ModifierFns>,
+            Option<&ConditionFns>,
+            Option<&mut ActionMock>,
+        ),
+        Without<ExternallyMocked>,
+    >,
     mut actions_data: Query<(
         &'static mut ActionValue,
         &'static mut ActionState,
@@ -291,24 +444,20 @@ fn update<S: ScheduleLabel>(
     for instance in &**instances {
         let Ok(mut context) = contexts.get_mut(instance.entity) else {
             trace!(
-                "skipping updating `{}` on `{}`",
+                "skipping updating `{}` on disabled `{}`",
                 instance.name, instance.entity
             );
             continue;
         };
 
         let gamepad = context.get::<GamepadDevice>().copied().unwrap_or_default();
-        let Some(context_actions) = instance.actions_mut(&mut context) else {
+        let context_active = instance.is_active(&context.as_readonly());
+        let Some(mut context_actions) = instance.actions_mut(&mut context) else {
             continue;
         };
 
-        context_actions.sort_by_cached_key(|&action| {
-            let Ok((.., action_bindings, _, _, _)) = actions.get(action) else {
-                // TODO: use `warn_once` when `bevy_log` becomes `no_std` compatible.
-                warn!(
-                    "`{action}` from `{}` missing action components",
-                    instance.name
-                );
+        let mods_count = |action: &Entity| {
+            let Ok((.., action_bindings, _, _, _)) = actions.get(*action) else {
                 return Reverse(0);
             };
 
@@ -318,13 +467,17 @@ fn update<S: ScheduleLabel>(
                 .max()
                 .unwrap_or(0);
             Reverse(value)
-        });
+        };
+
+        if !context_actions.is_sorted_by_key(mods_count) {
+            context_actions.sort_by_cached_key(mods_count);
+        }
 
         trace!("updating `{}` on `{}`", instance.name, instance.entity);
 
         reader.set_gamepad(gamepad);
 
-        let mut actions_iter = actions.iter_many_mut(context_actions);
+        let mut actions_iter = actions.iter_many_mut(&*context_actions);
         while let Some((
             action,
             action_name,
@@ -335,7 +488,12 @@ fn update<S: ScheduleLabel>(
             mock,
         )) = actions_iter.fetch_next()
         {
-            let (new_state, new_value) = if let Some(mut mock) = mock
+            let action_name = ShortName(action_name);
+            let (new_state, new_value) = if !context_active {
+                trace!("skipping updating `{action_name}` due to inactive context");
+                let dim = actions_data.get(action).map(|(v, ..)| v.dim()).unwrap();
+                (ActionState::None, ActionValue::zero(dim))
+            } else if let Some(mut mock) = mock
                 && mock.enabled
             {
                 trace!("updating `{action_name}` from `{mock:?}`");
@@ -488,14 +646,14 @@ fn apply<S: ScheduleLabel>(
     mut actions: Query<EntityMut, With<ActionFns>>,
 ) {
     for instance in &**instances {
-        let Ok(context_entity) = contexts.get(instance.entity) else {
+        let Ok(context) = contexts.get(instance.entity) else {
             trace!(
-                "skipping triggering for `{}` on `{}`",
+                "skipping triggering for `{}` on disabled `{}`",
                 instance.name, instance.entity,
             );
             continue;
         };
-        let Some(context_actions) = instance.actions(&context_entity) else {
+        let Some(context_actions) = instance.actions(&context) else {
             continue;
         };
 
@@ -505,17 +663,18 @@ fn apply<S: ScheduleLabel>(
         );
 
         let mut actions_iter = actions.iter_many_mut(context_actions);
-        while let Some(mut action_entity) = actions_iter.fetch_next() {
-            let fns = *action_entity.get::<ActionFns>().unwrap();
-            let value = *action_entity.get::<ActionValue>().unwrap();
-            fns.store_value(&mut action_entity, value);
+        while let Some(mut action) = actions_iter.fetch_next() {
+            let fns = *action.get::<ActionFns>().unwrap();
+            let value = *action.get::<ActionValue>().unwrap();
+            fns.store_value(&mut action, value);
 
-            let state = *action_entity.get::<ActionState>().unwrap();
-            let events = *action_entity.get::<ActionEvents>().unwrap();
-            let time = *action_entity.get::<ActionTime>().unwrap();
+            let state = *action.get::<ActionState>().unwrap();
+            let events = *action.get::<ActionEvents>().unwrap();
+            let time = *action.get::<ActionTime>().unwrap();
             fns.trigger(
                 &mut commands,
-                context_entity.id(),
+                context.id(),
+                action.id(),
                 state,
                 events,
                 value,
@@ -524,6 +683,70 @@ fn apply<S: ScheduleLabel>(
         }
     }
 }
+
+/// Enables or disables all action updates from inputs and mocks for context `C`.
+///
+/// By default, all contexts are active.
+///
+/// Inserting [`Self::INACTIVE`] is similar to removing the context. It transitions all context action states
+/// to [`ActionState::None`] with [`ActionValue::zero`], triggering the corresponding events.
+/// For each action where [`ActionSettings::require_reset`] is set, it will require inputs for its bindings
+/// to be inactive before they will be visible to actions from other contexts.
+///
+/// This is analogous to hiding an entity instead of despawning.
+/// Use this component when you want to toggle quickly, preserve bindings, or keep entity IDs.
+/// Use removal when the context is truly going away and you don't need it back soon.
+///
+/// Marked as required for `C` on context registration.
+#[derive(Component, Reflect, Deref)]
+#[component(immutable)]
+pub struct ContextActivity<C> {
+    #[deref]
+    active: bool,
+    #[reflect(ignore)]
+    marker: PhantomData<C>,
+}
+
+impl<C> ContextActivity<C> {
+    /// Active context.
+    pub const ACTIVE: Self = Self::new(true);
+
+    /// Inactive context.
+    pub const INACTIVE: Self = Self::new(false);
+
+    /// Creates a new instance with the given value.
+    #[must_use]
+    pub const fn new(active: bool) -> Self {
+        Self {
+            active,
+            marker: PhantomData,
+        }
+    }
+
+    /// Returns a new instance with the value inverted.
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        if self.active {
+            Self::INACTIVE
+        } else {
+            Self::ACTIVE
+        }
+    }
+}
+
+impl<C> Default for ContextActivity<C> {
+    fn default() -> Self {
+        Self::ACTIVE
+    }
+}
+
+impl<C> Clone for ContextActivity<C> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C> Copy for ContextActivity<C> {}
 
 /// Determines the evaluation order of the input context `C` on the entity.
 ///
@@ -536,6 +759,8 @@ fn apply<S: ScheduleLabel>(
 /// until the context that consumed them is evaluated again. This allows contexts layering, where
 /// some actions take priority over others. This behavior can be customized per-action by setting
 /// [`ActionSettings::consume_input`] to `false`.
+///
+/// Marked as required for `C` on context registration.
 ///
 /// # Examples
 ///
@@ -562,6 +787,7 @@ fn apply<S: ScheduleLabel>(
 pub struct ContextPriority<C> {
     #[deref]
     value: usize,
+    #[reflect(ignore)]
     marker: PhantomData<C>,
 }
 
@@ -591,9 +817,9 @@ impl<C> Copy for ContextPriority<C> {}
 /// Associated gamepad for all input contexts on this entity.
 ///
 /// If not present, input will be read from all connected gamepads.
-#[derive(
-    Component, Reflect, Debug, Serialize, Deserialize, Default, Hash, PartialEq, Eq, Clone, Copy,
-)]
+#[derive(Component, Reflect, Debug, Default, Hash, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serialize", reflect(Serialize, Deserialize))]
 pub enum GamepadDevice {
     /// Matches input from any gamepad.
     ///
